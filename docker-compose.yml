@@ -1,6 +1,19 @@
 version: "3.8"
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: emergency_vision_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -12,6 +25,14 @@ services:
       - API_HOST=0.0.0.0
       - API_PORT=8000
       - API_DEBUG=true
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_STREAM_NAME=emergency_vision:events
+      - REDIS_CONSUMER_GROUP=api_group
+      - REDIS_CONSUMER_NAME=api_consumer_1
+      - ENABLE_REDIS_CONSUMER=true
+    depends_on:
+      redis:
+        condition: service_healthy
     volumes:
       - ./apps/api:/app/apps/api
     restart: unless-stopped
@@ -25,6 +46,14 @@ services:
       - WORKER_DEVICE=cpu
       - DETECTION_MODEL_PATH=models/detection/yolo11n.pt
       - VIDEO_SOURCE=0
+      - EVENT_PUBLISHER_TYPE=redis
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_STREAM_NAME=emergency_vision:events
+      - REDIS_CONSUMER_GROUP=api_group
+      - REDIS_CONSUMER_NAME=api_consumer_1
+    depends_on:
+      redis:
+        condition: service_healthy
     volumes:
       - ./apps/worker:/app/apps/worker
       - ./models:/app/models
