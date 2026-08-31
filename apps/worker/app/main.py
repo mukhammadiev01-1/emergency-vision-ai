@@ -28,8 +28,16 @@ def run_pipeline(
     device: str = worker_settings.WORKER_DEVICE,
     output_path: str = None,
     max_frames: int = 0,
-) -> None:
-    """Run full video processing and event detection pipeline."""
+    confidence: float = worker_settings.CONFIDENCE_THRESHOLD,
+    iou: float = worker_settings.IOU_THRESHOLD,
+    line_ratio: float = worker_settings.LINE_CROSSING_POSITION_RATIO,
+    line_y: int = None,
+) -> dict:
+    """Run full video processing and event detection pipeline.
+
+    Returns:
+        Dictionary with processing statistics and event counts.
+    """
     logger.info("Initializing Emergency Vision AI Worker...")
     logger.info("Source: %s | Model: %s | Device: %s", source, model_path, device)
 
@@ -42,12 +50,13 @@ def run_pipeline(
     yolo_wrapper = YOLOModelWrapper(model_path=model_path, device=device)
     tracking_stage = TrackingStage(
         model_wrapper=yolo_wrapper,
-        conf_threshold=worker_settings.CONFIDENCE_THRESHOLD,
-        iou_threshold=worker_settings.IOU_THRESHOLD,
+        conf_threshold=confidence,
+        iou_threshold=iou,
         classes=worker_settings.DETECTION_CLASSES,
     )
     event_detector = LineCrossingDetector(
-        line_position_ratio=worker_settings.LINE_CROSSING_POSITION_RATIO,
+        line_y=line_y,
+        line_position_ratio=line_ratio,
         orientation=worker_settings.LINE_CROSSING_ORIENTATION,
     )
     annotator = VisualAnnotator()
@@ -76,13 +85,13 @@ def run_pipeline(
                 continue
 
             frame_h, frame_w = frame.shape[:2]
-            line_y = event_detector.update_line_position(frame_h, frame_w)
+            current_line_y = event_detector.update_line_position(frame_h, frame_w)
 
             # Step 1: Run Tracking
             tracking_result = tracking_stage.process(frame)
 
             # Step 2: Annotate Line
-            annotated_frame = annotator.draw_line(frame, line_y)
+            annotated_frame = annotator.draw_line(frame, current_line_y)
 
             # Step 3: Process Tracked Boxes & Event Detection
             if tracking_result is not None and tracking_result.boxes is not None and tracking_result.boxes.id is not None:
@@ -128,9 +137,17 @@ def run_pipeline(
             writer.release()
 
         elapsed = time.perf_counter() - start_time
-        fps = processed_count / elapsed if elapsed > 0 else 0
+        fps = processed_count / elapsed if elapsed > 0 else 0.0
         logger.info("Pipeline finished. Processed %d frames in %.2fs (%.2f FPS)", processed_count, elapsed, fps)
         logger.info("Summary: IN=%d, OUT=%d", event_detector.in_count, event_detector.out_count)
+
+    return {
+        "processed_frames": processed_count,
+        "in_count": event_detector.in_count,
+        "out_count": event_detector.out_count,
+        "fps": fps,
+        "elapsed_seconds": elapsed,
+    }
 
 
 def main():

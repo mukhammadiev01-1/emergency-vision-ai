@@ -10,3 +10,4 @@ pydantic-settings>=2.2.0
 pillow>=10.2.0
 tqdm>=4.66.0
 pyyaml>=6.0.1
+lap>=0.5.12
