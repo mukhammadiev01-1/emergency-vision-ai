@@ -1,4 +1,5 @@
 """FastAPI Application Entry Point."""
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,13 +11,24 @@ from apps.api.app.api.routes import api_router
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifespan context."""
     # Startup initialization
-    from apps.api.app.api.dependencies import get_stream_service, get_redis_consumer
+    from apps.api.app.api.dependencies import (
+        get_stream_service,
+        get_redis_consumer,
+        get_websocket_manager,
+    )
+    try:
+        loop = asyncio.get_running_loop()
+        get_websocket_manager().set_loop(loop)
+    except Exception:
+        pass
+
     if settings.ENABLE_REDIS_CONSUMER:
         get_redis_consumer().start()
     yield
     # Graceful shutdown cleanup
     if settings.ENABLE_REDIS_CONSUMER:
         get_redis_consumer().stop()
+    get_websocket_manager().clear()
     get_stream_service().cleanup_all()
 
 
@@ -44,8 +56,10 @@ app.include_router(api_router, prefix=settings.API_PREFIX)
 # Also expose top-level health and events endpoints for client convenience
 from apps.api.app.api.routes.health import router as health_router
 from apps.api.app.api.routes.events import router as events_router
+from apps.api.app.api.routes.websocket import router as websocket_router
 app.include_router(health_router)
 app.include_router(events_router, prefix="/events", tags=["Events"])
+app.include_router(websocket_router, prefix="/ws", tags=["WebSocket"])
 
 
 if __name__ == "__main__":

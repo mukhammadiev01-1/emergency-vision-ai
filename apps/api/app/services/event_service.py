@@ -25,6 +25,17 @@ class EventService:
         self._events: List[LineCrossingEvent] = []
         self._in_counts: Dict[str, int] = {}
         self._out_counts: Dict[str, int] = {}
+        self._listeners: List[Any] = []
+
+    def add_listener(self, listener: Any) -> None:
+        """Register a callback (e.g. WebSocket broadcast) to receive new events."""
+        if listener not in self._listeners:
+            self._listeners.append(listener)
+
+    def remove_listener(self, listener: Any) -> None:
+        """Unregister an event listener."""
+        if listener in self._listeners:
+            self._listeners.remove(listener)
 
     def record_event(
         self,
@@ -37,7 +48,7 @@ class EventService:
         timestamp: Optional[datetime] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> LineCrossingEvent:
-        """Record a newly generated line crossing event."""
+        """Record a newly generated line crossing event and notify listeners."""
         event_ts = timestamp or datetime.now(timezone.utc)
         event = LineCrossingEvent(
             event_id=f"evt_{uuid.uuid4().hex[:10]}",
@@ -58,6 +69,14 @@ class EventService:
             self._out_counts[stream_id] = self._out_counts.get(stream_id, 0) + 1
 
         logger.info("Recorded event %s (%s) for stream %s (track %d)", event.event_id, event_type.value, stream_id, track_id)
+
+        # Notify observer listeners (e.g., WebSocket broadcast)
+        for listener in list(self._listeners):
+            try:
+                listener(event)
+            except Exception as exc:
+                logger.error("Error in event listener callback: %s", exc)
+
         return event
 
     def ingest_request(self, request: EventCreateRequest) -> LineCrossingEvent:
