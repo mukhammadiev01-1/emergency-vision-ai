@@ -40,6 +40,9 @@ class StreamService:
         )
 
         try:
+            from apps.api.app.config import settings
+            api_event_url = f"http://127.0.0.1:{settings.API_PORT}{settings.API_PREFIX}/events"
+
             # Spawn worker process via abstraction
             pid = self._worker_manager.start_worker(
                 stream_id=stream_id,
@@ -47,6 +50,8 @@ class StreamService:
                 output_path=request.output_path,
                 max_frames=request.max_frames,
                 line_ratio=request.line_position_ratio,
+                publisher="http",
+                api_url=api_event_url,
             )
             record.worker_pid = pid
             record.status = StreamStatus.RUNNING

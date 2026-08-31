@@ -36,9 +36,12 @@ app.add_middleware(
 
 # Register aggregated routes
 app.include_router(api_router, prefix=settings.API_PREFIX)
-# Also expose top-level health endpoint
+
+# Also expose top-level health and events endpoints for client convenience
 from apps.api.app.api.routes.health import router as health_router
+from apps.api.app.api.routes.events import router as events_router
 app.include_router(health_router)
+app.include_router(events_router, prefix="/events", tags=["Events"])
 
 
 if __name__ == "__main__":

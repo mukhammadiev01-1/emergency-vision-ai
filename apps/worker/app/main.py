@@ -1,13 +1,17 @@
 """Worker Application Entry Point.
 
 Executes the pipeline on video streams or files:
-Capture -> Preprocess -> YOLO Detection & ByteTrack -> Line Crossing Events -> Postprocess / Logging.
+Capture -> Preprocess -> YOLO Detection & ByteTrack -> Line Crossing Events -> Event Publisher / Annotator.
 """
 import argparse
+from datetime import datetime, timezone
 import logging
 import sys
 import time
+from typing import Optional
+
 from apps.worker.app.config import worker_settings
+from apps.worker.app.events.publisher import EventPublisher, get_event_publisher
 from apps.worker.app.models.yolo import YOLOModelWrapper
 from apps.worker.app.pipeline.capture import VideoCaptureStream
 from apps.worker.app.pipeline.preprocess import FramePreprocessor
@@ -24,6 +28,7 @@ logger = logging.getLogger("emergency_vision.worker")
 
 def run_pipeline(
     source: str = worker_settings.VIDEO_SOURCE,
+    stream_id: str = "stream_default",
     model_path: str = worker_settings.DETECTION_MODEL_PATH,
     device: str = worker_settings.WORKER_DEVICE,
     output_path: str = None,
@@ -32,14 +37,38 @@ def run_pipeline(
     iou: float = worker_settings.IOU_THRESHOLD,
     line_ratio: float = worker_settings.LINE_CROSSING_POSITION_RATIO,
     line_y: int = None,
+    publisher: Optional[EventPublisher] = None,
+    publisher_type: str = "http",
+    api_url: Optional[str] = None,
 ) -> dict:
     """Run full video processing and event detection pipeline.
+
+    Args:
+        source: Video file path or RTSP URL.
+        stream_id: Origin stream ID for published events.
+        model_path: Path to YOLO weights.
+        device: Hardware device (cpu/cuda/mps).
+        output_path: Optional path for annotated output video.
+        max_frames: Max frames to process (0 = infinite).
+        confidence: Detection confidence threshold.
+        iou: Tracking / NMS IoU threshold.
+        line_ratio: Virtual line vertical ratio (0.0 to 1.0).
+        line_y: Explicit virtual line Y coordinate (overrides ratio).
+        publisher: EventPublisher instance (if None, created based on publisher_type).
+        publisher_type: Transport type ("http", "log", "memory", "none").
+        api_url: Destination URL for HTTPEventPublisher.
 
     Returns:
         Dictionary with processing statistics and event counts.
     """
     logger.info("Initializing Emergency Vision AI Worker...")
-    logger.info("Source: %s | Model: %s | Device: %s", source, model_path, device)
+    logger.info("Stream ID: %s | Source: %s | Model: %s | Device: %s", stream_id, source, model_path, device)
+
+    # Initialize event publisher
+    event_publisher = publisher or get_event_publisher(
+        publisher_type=publisher_type,
+        api_url=api_url,
+    )
 
     capture_stream = VideoCaptureStream(source)
     if not capture_stream.open():
@@ -97,8 +126,9 @@ def run_pipeline(
             if tracking_result is not None and tracking_result.boxes is not None and tracking_result.boxes.id is not None:
                 boxes = tracking_result.boxes.xyxy.cpu().numpy()
                 track_ids = tracking_result.boxes.id.int().cpu().tolist()
+                confs = tracking_result.boxes.conf.cpu().tolist() if tracking_result.boxes.conf is not None else [1.0] * len(track_ids)
 
-                for box, track_id in zip(boxes, track_ids):
+                for box, track_id, conf in zip(boxes, track_ids, confs):
                     box_tuple = tuple(map(int, box))
                     crossing = event_detector.update(
                         track_id=track_id,
@@ -106,10 +136,29 @@ def run_pipeline(
                         frame_height=frame_h,
                         frame_width=frame_w,
                     )
-                    if crossing == CrossingDirection.IN:
-                        logger.info(">>> EVENT: Track ID %d crossed line [IN] (Total IN: %d)", track_id, event_detector.in_count)
-                    elif crossing == CrossingDirection.OUT:
-                        logger.info("<<< EVENT: Track ID %d crossed line [OUT] (Total OUT: %d)", track_id, event_detector.out_count)
+                    if crossing is not None:
+                        event_type = "line_crossing_in" if crossing == CrossingDirection.IN else "line_crossing_out"
+                        center_x = (box_tuple[0] + box_tuple[2]) // 2
+                        center_y = (box_tuple[1] + box_tuple[3]) // 2
+
+                        logger.info(">>> EVENT: Track ID %d crossed line [%s] (Total IN: %d, OUT: %d)",
+                                    track_id, crossing.value.upper(), event_detector.in_count, event_detector.out_count)
+
+                        # Publish event to API / Transport
+                        if event_publisher is not None:
+                            event_publisher.publish(
+                                stream_id=stream_id,
+                                event_type=event_type,
+                                track_id=track_id,
+                                timestamp=datetime.now(timezone.utc),
+                                confidence=float(conf),
+                                position=[center_x, center_y],
+                                metadata={
+                                    "box": list(box_tuple),
+                                    "in_count": event_detector.in_count,
+                                    "out_count": event_detector.out_count,
+                                },
+                            )
 
                     annotated_frame = annotator.draw_detection(
                         annotated_frame,
@@ -142,6 +191,7 @@ def run_pipeline(
         logger.info("Summary: IN=%d, OUT=%d", event_detector.in_count, event_detector.out_count)
 
     return {
+        "stream_id": stream_id,
         "processed_frames": processed_count,
         "in_count": event_detector.in_count,
         "out_count": event_detector.out_count,
@@ -153,18 +203,24 @@ def run_pipeline(
 def main():
     parser = argparse.ArgumentParser(description="Emergency Vision AI Pipeline Worker")
     parser.add_argument("--source", type=str, default=worker_settings.VIDEO_SOURCE, help="Video file or RTSP stream URL")
+    parser.add_argument("--stream-id", type=str, default="stream_default", help="Unique stream identifier")
     parser.add_argument("--model", type=str, default=worker_settings.DETECTION_MODEL_PATH, help="Path to YOLO weights")
     parser.add_argument("--device", type=str, default=worker_settings.WORKER_DEVICE, help="Target device (cpu/cuda/mps)")
     parser.add_argument("--output", type=str, default=None, help="Optional output annotated video path")
     parser.add_argument("--max-frames", type=int, default=0, help="Max frames to process (0 = infinite)")
+    parser.add_argument("--publisher", type=str, default="http", choices=["http", "log", "memory", "none"], help="Event publisher transport type")
+    parser.add_argument("--api-url", type=str, default=None, help="API event endpoint URL (e.g., http://localhost:8000/api/v1/events)")
     args = parser.parse_args()
 
     run_pipeline(
         source=args.source,
+        stream_id=args.stream_id,
         model_path=args.model,
         device=args.device,
         output_path=args.output,
         max_frames=args.max_frames,
+        publisher_type=args.publisher,
+        api_url=args.api_url,
     )
 
 

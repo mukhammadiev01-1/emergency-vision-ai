@@ -1,7 +1,7 @@
 """Event Detection Schemas."""
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -15,6 +15,19 @@ class EventType(str, Enum):
     ACTION_DETECTED = "action_detected"
 
 
+class EventCreateRequest(BaseModel):
+    """Payload sent by CV worker when publishing an event to the API."""
+
+    stream_id: str = Field(..., min_length=1, description="Identifier of the origin stream")
+    event_type: EventType = Field(..., description="Classification of the event")
+    track_id: int = Field(..., description="Unique track ID of the object")
+    class_name: str = Field("person", description="Object classification label")
+    confidence: float = Field(1.0, ge=0.0, le=1.0, description="Detection / tracking confidence")
+    position: Optional[List[int]] = Field(None, description="[x, y] center coordinate at trigger")
+    timestamp: Optional[datetime] = Field(None, description="Timestamp of the event trigger")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Arbitrary event metadata")
+
+
 class LineCrossingEvent(BaseModel):
     """Structured event triggered by an object crossing a virtual line."""
 
@@ -26,6 +39,7 @@ class LineCrossingEvent(BaseModel):
     timestamp: datetime
     confidence: float = Field(..., ge=0.0, le=1.0)
     position: Optional[List[int]] = Field(None, description="[x, y] center coordinate at trigger")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional context metadata")
 
 
 class EventListResponse(BaseModel):
@@ -38,7 +52,7 @@ class EventListResponse(BaseModel):
 class EventStatsResponse(BaseModel):
     """Summary metrics of line crossing events."""
 
-    stream_id: str
+    stream_id: Optional[str] = None
     in_count: int
     out_count: int
     net_count: int

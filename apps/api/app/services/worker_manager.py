@@ -37,6 +37,8 @@ class LocalWorkerManager:
         output_path: Optional[str] = None,
         max_frames: Optional[int] = None,
         line_ratio: Optional[float] = None,
+        publisher: str = "http",
+        api_url: Optional[str] = None,
     ) -> int:
         """Start a dedicated worker subprocess for the stream.
 
@@ -53,7 +55,13 @@ class LocalWorkerManager:
             "apps.worker.app.main",
             "--source",
             str(source_url),
+            "--stream-id",
+            str(stream_id),
+            "--publisher",
+            str(publisher or "http"),
         ]
+        if api_url:
+            cmd.extend(["--api-url", api_url])
         if model_path:
             cmd.extend(["--model", model_path])
         if device:

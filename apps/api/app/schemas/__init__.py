@@ -13,6 +13,7 @@ from apps.api.app.schemas.stream import (
 )
 from apps.api.app.schemas.event import (
     EventType,
+    EventCreateRequest,
     LineCrossingEvent,
     EventListResponse,
     EventStatsResponse,
@@ -28,6 +29,7 @@ __all__ = [
     "StreamStatus",
     "StreamListResponse",
     "EventType",
+    "EventCreateRequest",
     "LineCrossingEvent",
     "EventListResponse",
     "EventStatsResponse",
