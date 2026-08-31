@@ -12,6 +12,8 @@ async def lifespan(app: FastAPI):
     # Startup initialization
     yield
     # Graceful shutdown cleanup
+    from apps.api.app.api.dependencies import get_stream_service
+    get_stream_service().cleanup_all()
 
 
 app = FastAPI(
