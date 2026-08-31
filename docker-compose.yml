@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api
+    container_name: emergency_vision_api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_DEBUG=true
+    volumes:
+      - ./apps/api:/app/apps/api
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.worker
+    container_name: emergency_vision_worker
+    environment:
+      - WORKER_DEVICE=cpu
+      - DETECTION_MODEL_PATH=models/detection/yolo11n.pt
+      - VIDEO_SOURCE=0
+    volumes:
+      - ./apps/worker:/app/apps/worker
+      - ./models:/app/models
+    restart: unless-stopped

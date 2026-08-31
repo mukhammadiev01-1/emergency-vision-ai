@@ -1,0 +1,39 @@
+"""Worker Configuration Module."""
+from typing import List, Union
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class WorkerSettings(BaseSettings):
+    """Configuration settings for CV Worker and Pipelines."""
+
+    # Processing hardware
+    WORKER_DEVICE: str = "cpu"  # "cuda", "mps", or "cpu"
+
+    # Models configuration
+    DETECTION_MODEL_PATH: str = "models/detection/yolo11n.pt"
+    ACTION_MODEL_PATH: str = "models/action_recognition/r3d18_ucf101.pt"
+    TRACKER_TYPE: str = "bytetrack.yaml"
+
+    # Detection parameters
+    CONFIDENCE_THRESHOLD: float = 0.5
+    IOU_THRESHOLD: float = 0.45
+    DETECTION_CLASSES: List[int] = [0]  # default: person (COCO id 0)
+
+    # Video Capture
+    VIDEO_SOURCE: Union[str, int] = "0"
+    CAPTURE_FPS: float = 30.0
+    FRAME_SKIP: int = 1
+    ENABLE_VISUALIZATION: bool = False
+
+    # Line Crossing Event Parameters
+    LINE_CROSSING_ORIENTATION: str = "horizontal"  # "horizontal" or "vertical"
+    LINE_CROSSING_POSITION_RATIO: float = 0.5      # 0.0 to 1.0 (relative to frame height/width)
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+
+
+worker_settings = WorkerSettings()
