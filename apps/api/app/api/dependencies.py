@@ -6,6 +6,9 @@ from apps.api.app.services.stream_service import StreamService
 from apps.api.app.services.event_service import EventService
 
 
+from apps.api.app.services.redis_consumer import RedisEventConsumer
+
+
 @lru_cache
 def get_settings() -> APISettings:
     """Get cached APISettings singleton."""
@@ -16,6 +19,7 @@ def get_settings() -> APISettings:
 _inference_service = InferenceService()
 _stream_service = StreamService()
 _event_service = EventService()
+_redis_consumer = RedisEventConsumer(event_service=_event_service)
 
 
 def get_inference_service() -> InferenceService:
@@ -31,3 +35,8 @@ def get_stream_service() -> StreamService:
 def get_event_service() -> EventService:
     """Provide EventService dependency."""
     return _event_service
+
+
+def get_redis_consumer() -> RedisEventConsumer:
+    """Provide RedisEventConsumer dependency."""
+    return _redis_consumer

@@ -17,6 +17,13 @@ class APISettings(BaseSettings):
     # Model / Worker integration mode (e.g. "direct", "redis", "mock")
     WORKER_MODE: str = "direct"
 
+    # Redis Streams Configuration
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_STREAM_NAME: str = "emergency_vision:events"
+    REDIS_CONSUMER_GROUP: str = "api_group"
+    REDIS_CONSUMER_NAME: str = "api_consumer_1"
+    ENABLE_REDIS_CONSUMER: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

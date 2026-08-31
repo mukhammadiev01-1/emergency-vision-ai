@@ -10,9 +10,13 @@ from apps.api.app.api.routes import api_router
 async def lifespan(app: FastAPI):
     """Application startup and shutdown lifespan context."""
     # Startup initialization
+    from apps.api.app.api.dependencies import get_stream_service, get_redis_consumer
+    if settings.ENABLE_REDIS_CONSUMER:
+        get_redis_consumer().start()
     yield
     # Graceful shutdown cleanup
-    from apps.api.app.api.dependencies import get_stream_service
+    if settings.ENABLE_REDIS_CONSUMER:
+        get_redis_consumer().stop()
     get_stream_service().cleanup_all()
 
 

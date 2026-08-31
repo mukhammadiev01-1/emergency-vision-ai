@@ -38,8 +38,10 @@ def run_pipeline(
     line_ratio: float = worker_settings.LINE_CROSSING_POSITION_RATIO,
     line_y: int = None,
     publisher: Optional[EventPublisher] = None,
-    publisher_type: str = "http",
+    publisher_type: str = worker_settings.EVENT_PUBLISHER_TYPE,
     api_url: Optional[str] = None,
+    redis_url: Optional[str] = None,
+    stream_name: Optional[str] = None,
 ) -> dict:
     """Run full video processing and event detection pipeline.
 
@@ -55,19 +57,24 @@ def run_pipeline(
         line_ratio: Virtual line vertical ratio (0.0 to 1.0).
         line_y: Explicit virtual line Y coordinate (overrides ratio).
         publisher: EventPublisher instance (if None, created based on publisher_type).
-        publisher_type: Transport type ("http", "log", "memory", "none").
+        publisher_type: Transport type ("redis", "http", "log", "memory", "none").
         api_url: Destination URL for HTTPEventPublisher.
+        redis_url: Connection URL for RedisStreamEventPublisher.
+        stream_name: Target Redis Stream key for RedisStreamEventPublisher.
 
     Returns:
         Dictionary with processing statistics and event counts.
     """
     logger.info("Initializing Emergency Vision AI Worker...")
-    logger.info("Stream ID: %s | Source: %s | Model: %s | Device: %s", stream_id, source, model_path, device)
+    logger.info("Stream ID: %s | Source: %s | Model: %s | Device: %s | Publisher: %s",
+                stream_id, source, model_path, device, publisher_type)
 
     # Initialize event publisher
     event_publisher = publisher or get_event_publisher(
         publisher_type=publisher_type,
         api_url=api_url,
+        redis_url=redis_url or worker_settings.REDIS_URL,
+        stream_name=stream_name or worker_settings.REDIS_STREAM_NAME,
     )
 
     capture_stream = VideoCaptureStream(source)
@@ -208,8 +215,10 @@ def main():
     parser.add_argument("--device", type=str, default=worker_settings.WORKER_DEVICE, help="Target device (cpu/cuda/mps)")
     parser.add_argument("--output", type=str, default=None, help="Optional output annotated video path")
     parser.add_argument("--max-frames", type=int, default=0, help="Max frames to process (0 = infinite)")
-    parser.add_argument("--publisher", type=str, default="http", choices=["http", "log", "memory", "none"], help="Event publisher transport type")
-    parser.add_argument("--api-url", type=str, default=None, help="API event endpoint URL (e.g., http://localhost:8000/api/v1/events)")
+    parser.add_argument("--publisher", type=str, default=worker_settings.EVENT_PUBLISHER_TYPE, choices=["redis", "http", "log", "memory", "none"], help="Event publisher transport type")
+    parser.add_argument("--api-url", type=str, default=None, help="API event endpoint URL (for HTTP publisher)")
+    parser.add_argument("--redis-url", type=str, default=worker_settings.REDIS_URL, help="Redis connection URL (for Redis publisher)")
+    parser.add_argument("--redis-stream", type=str, default=worker_settings.REDIS_STREAM_NAME, help="Redis Stream name (for Redis publisher)")
     args = parser.parse_args()
 
     run_pipeline(
@@ -221,6 +230,8 @@ def main():
         max_frames=args.max_frames,
         publisher_type=args.publisher,
         api_url=args.api_url,
+        redis_url=args.redis_url,
+        stream_name=args.redis_stream,
     )
 
 

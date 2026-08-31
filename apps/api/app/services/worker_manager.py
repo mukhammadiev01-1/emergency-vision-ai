@@ -39,6 +39,8 @@ class LocalWorkerManager:
         line_ratio: Optional[float] = None,
         publisher: str = "http",
         api_url: Optional[str] = None,
+        redis_url: Optional[str] = None,
+        redis_stream: Optional[str] = None,
     ) -> int:
         """Start a dedicated worker subprocess for the stream.
 
@@ -62,6 +64,10 @@ class LocalWorkerManager:
         ]
         if api_url:
             cmd.extend(["--api-url", api_url])
+        if redis_url:
+            cmd.extend(["--redis-url", redis_url])
+        if redis_stream:
+            cmd.extend(["--redis-stream", redis_stream])
         if model_path:
             cmd.extend(["--model", model_path])
         if device:

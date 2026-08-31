@@ -29,6 +29,12 @@ class WorkerSettings(BaseSettings):
     LINE_CROSSING_ORIENTATION: str = "horizontal"  # "horizontal" or "vertical"
     LINE_CROSSING_POSITION_RATIO: float = 0.5      # 0.0 to 1.0 (relative to frame height/width)
 
+    # Event Publishing Transport
+    EVENT_PUBLISHER_TYPE: str = "redis"  # "redis", "http", "memory", "log"
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_STREAM_NAME: str = "emergency_vision:events"
+    REDIS_STREAM_MAXLEN: int = 10000
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
