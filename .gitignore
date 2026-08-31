@@ -71,11 +71,16 @@ venv.bak/
 
 # Model weights and artifacts (keep .gitkeep)
 models/detection/*.pt
+models/detection/*.pth
 models/detection/*.onnx
 models/detection/*.engine
 models/action_recognition/*.pt
+models/action_recognition/*.pth
 models/action_recognition/*.onnx
 models/action_recognition/*.engine
+*.pt
+*.pth
+*.onnx
 !models/detection/.gitkeep
 !models/action_recognition/.gitkeep
 
@@ -87,5 +92,6 @@ mediamtx.yml
 *.avi
 *.mkv
 runs/
-datasets/
-UCF101_subset/
+/datasets/
+/data/
+/UCF101_subset/

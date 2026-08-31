@@ -32,7 +32,8 @@ class ActionRecognitionWrapper:
             if self.weights_path:
                 model = r3d_18()
                 model.fc = nn.Linear(model.fc.in_features, self.num_classes)
-                state_dict = torch.load(self.weights_path, map_location=self.device)
+                loaded = torch.load(self.weights_path, map_location=self.device, weights_only=False)
+                state_dict = loaded["model_state_dict"] if isinstance(loaded, dict) and "model_state_dict" in loaded else loaded
                 model.load_state_dict(state_dict)
             else:
                 model = r3d_18(weights=R3D_18_Weights.DEFAULT)
