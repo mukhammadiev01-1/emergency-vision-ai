@@ -1,7 +1,7 @@
 """Worker Application Entry Point.
 
 Executes the vision pipeline on video streams or files:
-Capture -> Preprocess -> YOLO Detection & ByteTrack -> Line Crossing Events -> Action Recognition (R3D-18 FALL) -> Event Publisher / Annotator.
+Capture -> Preprocess -> YOLO Detection & ByteTrack -> Line Crossing Events -> Per-Person Action Recognition (R3D-18 FALL) -> Event Publisher / Annotator.
 """
 import argparse
 from datetime import datetime, timezone
@@ -49,6 +49,8 @@ def run_pipeline(
     action_consecutive_windows: int = worker_settings.ACTION_CONSECUTIVE_WINDOWS,
     action_cooldown: float = worker_settings.ACTION_COOLDOWN_SECONDS,
     action_interval: int = worker_settings.ACTION_INFERENCE_INTERVAL,
+    action_crop_padding: float = worker_settings.ACTION_CROP_PADDING_RATIO,
+    action_stale_timeout: float = worker_settings.ACTION_STALE_TRACK_TIMEOUT,
     enable_action: bool = worker_settings.ENABLE_ACTION_RECOGNITION,
     action_consecutive: Optional[int] = None,  # Backward compatibility alias
 ) -> dict:
@@ -75,6 +77,8 @@ def run_pipeline(
         action_consecutive_windows: Consecutive positive inference windows required for trigger.
         action_cooldown: Cooldown in seconds before triggering another action event.
         action_interval: Frame interval between action model inferences.
+        action_crop_padding: Fractional padding around person bounding box.
+        action_stale_timeout: Seconds before purging disappeared tracks.
         enable_action: Explicit flag to enable action recognition.
         action_consecutive: Optional legacy alias for action_consecutive_windows.
 
@@ -117,7 +121,7 @@ def run_pipeline(
     # Initialize Action Recognition Stage conditionally
     action_stage: Optional[ActionRecognitionStage] = None
     if action_model_path is not None or enable_action:
-        logger.info("Enabling Action Recognition (R3D-18)...")
+        logger.info("Enabling Per-Person Action Recognition (R3D-18)...")
         action_wrapper = ActionRecognitionWrapper(
             weights_path=action_model_path,
             device=device,
@@ -130,15 +134,18 @@ def run_pipeline(
             conf_threshold=action_threshold,
             consecutive_required=consecutive_windows,
             cooldown_seconds=action_cooldown,
+            crop_padding_ratio=action_crop_padding,
+            stale_track_timeout_seconds=action_stale_timeout,
             stream_id=stream_id,
         )
         logger.info(
-            "Action Recognition Stage initialized: model=%s, threshold=%.2f, consecutive_windows=%d, cooldown=%.1fs, interval=%d",
+            "Action Recognition Stage initialized: model=%s, threshold=%.2f, consecutive_windows=%d, cooldown=%.1fs, interval=%d, padding=%.2f",
             action_model_path or "Torchvision Kinetics-400 DEFAULT",
             action_threshold,
             consecutive_windows,
             action_cooldown,
             action_interval,
+            action_crop_padding,
         )
     else:
         logger.info("Action recognition is disabled.")
@@ -180,6 +187,7 @@ def run_pipeline(
             annotated_frame = annotator.draw_line(frame, current_line_y)
 
             # Step 3: Process Tracked Boxes & Line Crossing Detection
+            tracked_persons = []
             if tracking_result is not None and tracking_result.boxes is not None and tracking_result.boxes.id is not None:
                 boxes = tracking_result.boxes.xyxy.cpu().numpy()
                 track_ids = tracking_result.boxes.id.int().cpu().tolist()
@@ -187,6 +195,8 @@ def run_pipeline(
 
                 for box, track_id, conf in zip(boxes, track_ids, confs):
                     box_tuple = tuple(map(int, box))
+                    tracked_persons.append((track_id, box_tuple, float(conf)))
+
                     crossing = event_detector.update(
                         track_id=track_id,
                         box=box_tuple,
@@ -223,14 +233,20 @@ def run_pipeline(
                         track_id=track_id,
                     )
 
-            # Step 4: Run Action Recognition (if enabled)
+            # Step 4: Run Per-Person Action Recognition (if enabled)
             if action_stage is not None:
-                action_event = action_stage.process(frame, timestamp=current_ts)
-                if action_event is not None:
+                action_events = action_stage.process_frame_tracks(
+                    frame=frame,
+                    tracks=tracked_persons,
+                    frame_idx=frame_idx,
+                    timestamp=current_ts,
+                )
+                for action_event in action_events:
                     fall_event_count += 1
                     logger.warning(
-                        ">>> EMERGENCY EVENT on %s: Confirmed %s (Confidence: %.2f)",
+                        ">>> EMERGENCY EVENT on %s [Track ID %d]: Confirmed %s (Confidence: %.2f)",
                         stream_id,
+                        action_event.track_id,
                         action_event.action,
                         action_event.confidence,
                     )
@@ -240,11 +256,11 @@ def run_pipeline(
                         event_publisher.publish(
                             stream_id=stream_id,
                             event_type=action_event.event_type,
-                            track_id=0,
+                            track_id=action_event.track_id,
                             class_name=action_event.action,
                             confidence=action_event.confidence,
                             timestamp=action_event.timestamp,
-                            position=None,
+                            position=action_event.position,
                             metadata=action_event.metadata,
                         )
 
@@ -269,8 +285,13 @@ def run_pipeline(
 
         elapsed = time.perf_counter() - start_time
         fps = processed_count / elapsed if elapsed > 0 else 0.0
+        latency_stats = action_stage.get_latency_stats() if action_stage is not None else {}
+
         logger.info("Pipeline finished. Processed %d frames in %.2fs (%.2f FPS)", processed_count, elapsed, fps)
         logger.info("Summary: IN=%d, OUT=%d, FALL_EVENTS=%d", event_detector.in_count, event_detector.out_count, fall_event_count)
+        if action_stage is not None and latency_stats.get("evaluations", 0) > 0:
+            logger.info("Action Recognition Latency: Preprocess=%.2fms, R3D=%.2fms, Total=%.2fms (%d evaluations)",
+                        latency_stats["preprocess_ms"], latency_stats["inference_ms"], latency_stats["total_ms"], latency_stats["evaluations"])
 
     return {
         "stream_id": stream_id,
@@ -280,6 +301,7 @@ def run_pipeline(
         "fall_count": fall_event_count,
         "fps": fps,
         "elapsed_seconds": elapsed,
+        "action_latencies": latency_stats,
     }
 
 
@@ -309,6 +331,8 @@ def main():
     )
     parser.add_argument("--action-cooldown", type=float, default=worker_settings.ACTION_COOLDOWN_SECONDS, help="Cooldown in seconds between events")
     parser.add_argument("--action-interval", type=int, default=worker_settings.ACTION_INFERENCE_INTERVAL, help="Frame step between action model evaluations")
+    parser.add_argument("--action-crop-padding", type=float, default=worker_settings.ACTION_CROP_PADDING_RATIO, help="Fractional padding around person bounding box")
+    parser.add_argument("--action-stale-timeout", type=float, default=worker_settings.ACTION_STALE_TRACK_TIMEOUT, help="Seconds before purging stale track buffers")
     parser.add_argument("--enable-action", action="store_true", default=worker_settings.ENABLE_ACTION_RECOGNITION, help="Enable action recognition")
 
     args = parser.parse_args()
@@ -329,6 +353,8 @@ def main():
         action_consecutive_windows=args.action_consecutive_windows,
         action_cooldown=args.action_cooldown,
         action_interval=args.action_interval,
+        action_crop_padding=args.action_crop_padding,
+        action_stale_timeout=args.action_stale_timeout,
         enable_action=args.enable_action,
     )
 

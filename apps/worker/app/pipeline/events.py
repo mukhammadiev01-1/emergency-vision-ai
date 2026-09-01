@@ -17,20 +17,24 @@ class EmergencyActionEvent:
     """Structured event triggered upon temporal confirmation of an emergency action."""
 
     stream_id: str
+    track_id: int = 0
     event_type: str = "action_detected"
     action: str = "FALL"
     confidence: float = 1.0
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    position: Optional[List[int]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
         return {
             "stream_id": self.stream_id,
+            "track_id": self.track_id,
             "event_type": self.event_type,
             "action": self.action,
             "confidence": self.confidence,
             "timestamp": self.timestamp.isoformat(),
+            "position": self.position,
             "metadata": self.metadata,
         }
 

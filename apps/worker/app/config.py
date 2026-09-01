@@ -25,6 +25,8 @@ class WorkerSettings(BaseSettings):
     ACTION_CONSECUTIVE_WINDOWS: int = 2
     ACTION_COOLDOWN_SECONDS: float = 5.0
     ACTION_INFERENCE_INTERVAL: int = 8
+    ACTION_CROP_PADDING_RATIO: float = 0.05
+    ACTION_STALE_TRACK_TIMEOUT: float = 3.0
 
     # Video Capture
     VIDEO_SOURCE: Union[str, int] = "0"
