@@ -85,11 +85,18 @@ def download_file(url: str, dest_path: str, timeout: int = 30) -> bool:
     logger.info("Downloading %s -> %s", url, dest_path)
     tmp_path = dest_path + ".tmp"
     try:
+        import ssl
+        try:
+            import certifi
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            ssl_ctx = ssl._create_unverified_context()
+
         req = urllib.request.Request(
             url,
             headers={"User-Agent": "EmergencyVisionAI/1.0 (Research Dataset Downloader)"},
         )
-        with urllib.request.urlopen(req, timeout=timeout) as response, open(tmp_path, "wb") as out_file:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as response, open(tmp_path, "wb") as out_file:
             data = response.read()
             out_file.write(data)
         os.rename(tmp_path, dest_path)
