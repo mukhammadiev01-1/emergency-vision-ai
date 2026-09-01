@@ -1,5 +1,5 @@
 """Worker Configuration Module."""
-from typing import List, Union
+from typing import List, Optional, Union
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,13 +11,20 @@ class WorkerSettings(BaseSettings):
 
     # Models configuration
     DETECTION_MODEL_PATH: str = "models/detection/yolo11n.pt"
-    ACTION_MODEL_PATH: str = "models/action_recognition/r3d18_ucf101.pt"
+    ACTION_MODEL_PATH: Optional[str] = None
     TRACKER_TYPE: str = "bytetrack.yaml"
 
     # Detection parameters
     CONFIDENCE_THRESHOLD: float = 0.5
     IOU_THRESHOLD: float = 0.45
     DETECTION_CLASSES: List[int] = [0]  # default: person (COCO id 0)
+
+    # Action Recognition parameters
+    ENABLE_ACTION_RECOGNITION: bool = False
+    ACTION_CONFIDENCE_THRESHOLD: float = 0.70
+    ACTION_CONSECUTIVE_WINDOWS: int = 2
+    ACTION_COOLDOWN_SECONDS: float = 5.0
+    ACTION_INFERENCE_INTERVAL: int = 8
 
     # Video Capture
     VIDEO_SOURCE: Union[str, int] = "0"

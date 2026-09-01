@@ -1,6 +1,8 @@
 """Line Crossing and Spatial Event Detection Stage."""
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 class CrossingDirection(str, Enum):
@@ -8,6 +10,29 @@ class CrossingDirection(str, Enum):
 
     IN = "in"       # Top -> Bottom or Left -> Right
     OUT = "out"     # Bottom -> Top or Right -> Left
+
+
+@dataclass
+class EmergencyActionEvent:
+    """Structured event triggered upon temporal confirmation of an emergency action."""
+
+    stream_id: str
+    event_type: str = "action_detected"
+    action: str = "FALL"
+    confidence: float = 1.0
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "stream_id": self.stream_id,
+            "event_type": self.event_type,
+            "action": self.action,
+            "confidence": self.confidence,
+            "timestamp": self.timestamp.isoformat(),
+            "metadata": self.metadata,
+        }
 
 
 class LineCrossingDetector:
