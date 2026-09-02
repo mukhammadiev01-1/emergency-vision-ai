@@ -120,10 +120,13 @@ def run_pipeline(
 
     # Initialize Action Recognition Stage conditionally
     action_stage: Optional[ActionRecognitionStage] = None
-    if action_model_path is not None or enable_action:
+    if enable_action:
+        weights_to_load = action_model_path if (action_model_path and os.path.exists(action_model_path)) else (
+            action_model_path if action_model_path is not None else worker_settings.ACTION_MODEL_PATH
+        )
         logger.info("Enabling Per-Person Action Recognition (R3D-18)...")
         action_wrapper = ActionRecognitionWrapper(
-            weights_path=action_model_path,
+            weights_path=weights_to_load,
             device=device,
             num_classes=2,
         )
@@ -140,7 +143,7 @@ def run_pipeline(
         )
         logger.info(
             "Action Recognition Stage initialized: model=%s, threshold=%.2f, consecutive_windows=%d, cooldown=%.1fs, interval=%d, padding=%.2f",
-            action_model_path or "Torchvision Kinetics-400 DEFAULT",
+            weights_to_load or "Torchvision Kinetics-400 DEFAULT",
             action_threshold,
             consecutive_windows,
             action_cooldown,

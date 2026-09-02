@@ -69,7 +69,7 @@ venv.bak/
 *~
 .DS_Store
 
-# Model weights and artifacts (keep .gitkeep)
+# Model weights and artifacts (keep canonical production models and .gitkeep)
 models/detection/*.pt
 models/detection/*.pth
 models/detection/*.onnx
@@ -83,6 +83,8 @@ models/action_recognition/*.engine
 *.onnx
 !models/detection/.gitkeep
 !models/action_recognition/.gitkeep
+!models/action_recognition/r3d18_urfd_best.pth
+!models/detection/yolo11n.pt
 
 # MediaMTX & video artifacts
 mediamtx
