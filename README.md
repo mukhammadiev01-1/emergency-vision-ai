@@ -122,7 +122,7 @@ emergency-vision-ai/
 ### 1. Canonical Model Artifacts & Git LFS
 The production models are tracked and versioned via **Git LFS**:
 - **Detection Model**: [`models/detection/yolo11n.pt`](models/detection/yolo11n.pt) (5.4 MB, SHA-256: `0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1`)
-- **Emergency Action Model**: [`models/action_recognition/r3d18_urfd_best.pth`](models/action_recognition/r3d18_urfd_best.pth) (127 MB, SHA-256: `2e4f379ca7d89858edc077aa6202d0ea537f4d312ace18accd63bffcd9be9920`)
+- **Emergency Action Model**: [`models/action_recognition/r3d18_urfd_best.pth`](models/action_recognition/r3d18_urfd_best.pth) (127 MB, SHA-256: `52cc51fd016263e7529009f23147d7a91b8855d685f11239346016ff55eadb5c`)
 
 To pull model weights after cloning:
 ```bash
