@@ -74,7 +74,7 @@ COLOR_ACCENT_BLUE = (255, 140, 0)
 CANONICAL_PERSON_CROPS_CHECKPOINT = "models/action_recognition/r3d18_urfd_person_crops.pth"
 CANONICAL_BASELINE_CHECKPOINT = "models/action_recognition/r3d18_urfd_best.pth"
 
-AUTHORITATIVE_PERSON_CROPS_SHA256 = "9b1a8d6f0c4e7b2a5d3f8e1a6c0b9e4f2a7d5c8b1e4f0a3d6c9b2e5f8a1d4c7b"
+AUTHORITATIVE_PERSON_CROPS_SHA256 = "5b43c57168834f47c44309b823cec5e287a88e3e9d20fd896ef2855d7bed0206"
 AUTHORITATIVE_BASELINE_SHA256 = "52cc51fd016263e7529009f23147d7a91b8855d685f11239346016ff55eadb5c"
 
 MIN_PLAUSIBLE_CHECKPOINT_SIZE = 1024 * 1024  # 1 MB minimum
@@ -674,8 +674,8 @@ def run_camera_demo(
             latest_predictions[current_eval_track_id] = {
                 "action": pred.action,
                 "confidence": pred.confidence,
-                "fall_probability": pred.probabilities.get("FALL", 0.0),
-                "normal_probability": pred.probabilities.get("NORMAL", 0.0),
+                "fall_probability": getattr(pred, "fall_probability", 0.0),
+                "normal_probability": getattr(pred, "normal_probability", 0.0),
                 "inference_ms": (t1 - t0) * 1000.0,
             }
         return pred

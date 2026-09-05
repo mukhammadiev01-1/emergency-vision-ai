@@ -22,8 +22,20 @@ class TestDownloadModels(unittest.TestCase):
 
     def setUp(self):
         self.test_dir = os.path.realpath(tempfile.mkdtemp())
+        self.mock_downloads = os.path.join(self.test_dir, "Downloads")
+        os.makedirs(self.mock_downloads, exist_ok=True)
+        orig_expanduser = os.path.expanduser
+
+        def fake_expanduser(path):
+            if isinstance(path, str) and "~/Downloads" in path:
+                return path.replace("~/Downloads", self.mock_downloads)
+            return orig_expanduser(path)
+
+        self.patcher = patch("os.path.expanduser", side_effect=fake_expanduser)
+        self.patcher.start()
 
     def tearDown(self):
+        self.patcher.stop()
         if os.path.exists(self.test_dir):
             shutil.rmtree(self.test_dir)
 
