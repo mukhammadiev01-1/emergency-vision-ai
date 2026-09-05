@@ -376,3 +376,32 @@ class TestCameraDemo(unittest.TestCase):
             self.assertTrue(report["is_baseline"])
             self.assertFalse(report["is_person_crops"])
             self.assertEqual(len(report["checkpoint_sha256"]), 64)
+
+    def test_resolve_model_checkpoint_auto_materialize(self):
+        """Verify auto_materialize=True copies candidate into canonical models path."""
+        exp_dir = os.path.join(self.test_dir, "experiments", "2026-09-05_r3d18_urfd_person_crops")
+        os.makedirs(exp_dir, exist_ok=True)
+        exp_ckpt = os.path.join(exp_dir, "r3d18_urfd_person_crops.pth")
+        with open(exp_ckpt, "wb") as f:
+            f.write(b"0" * (1024 * 1024 + 10))
+
+        canonical_dest = os.path.join(self.test_dir, CANONICAL_PERSON_CROPS_CHECKPOINT)
+        self.assertFalse(os.path.exists(canonical_dest))
+
+        resolved = resolve_model_checkpoint(repo_root=self.test_dir, auto_materialize=True)
+        self.assertEqual(resolved, canonical_dest)
+        self.assertTrue(os.path.exists(canonical_dest))
+
+    def test_resolve_model_checkpoint_downloads_candidate(self):
+        """Verify candidate in ~/Downloads is discovered and can be materialized."""
+        mock_downloads_dir = os.path.join(self.test_dir, "Downloads")
+        os.makedirs(mock_downloads_dir, exist_ok=True)
+        dl_ckpt = os.path.join(mock_downloads_dir, "r3d18_urfd_person_crops.pth")
+        with open(dl_ckpt, "wb") as f:
+            f.write(b"0" * (1024 * 1024 + 10))
+
+        with patch("os.path.expanduser", side_effect=lambda p: p.replace("~/Downloads", mock_downloads_dir)):
+            candidates = find_person_crop_candidates(repo_root=self.test_dir)
+            dl_matches = [c for c in candidates if "Downloads" in c[0]]
+            self.assertGreaterEqual(len(dl_matches), 1)
+            self.assertEqual(dl_matches[0][1], dl_ckpt)

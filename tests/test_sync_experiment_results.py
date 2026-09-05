@@ -269,11 +269,12 @@ class TestExperimentSync:
         assert "empty" in str(exc_info.value).lower()
 
     def test_include_weights_copies_pth(self, mock_drive_structure: Path, tmp_path: Path):
-        """Test that weights are copied when include_weights=True."""
+        """Test that weights are copied to both experiment dir and canonical path when include_weights=True."""
         dest_root = tmp_path / "experiments"
         manifest = sync_experiment_results(
             drive_root=mock_drive_structure,
             dest_root=dest_root,
+            repo_root=tmp_path,
             experiment_name="test_weights_exp",
             include_weights=True,
         )
@@ -282,6 +283,10 @@ class TestExperimentSync:
         weights_file = dest_root / "test_weights_exp" / "r3d18_urfd_person_crops.pth"
         assert weights_file.exists()
         assert weights_file.stat().st_size > 0
+
+        canonical_weights = tmp_path / CANONICAL_CHECKPOINT_REL_PATH
+        assert canonical_weights.exists()
+        assert canonical_weights.stat().st_size > 0
 
     def test_dry_run_mode(self, mock_drive_structure: Path, tmp_path: Path):
         """Test that dry run verifies artifacts without writing to destination."""

@@ -27,6 +27,7 @@ import hashlib
 import logging
 import os
 from pathlib import Path
+import shutil
 import signal
 import sys
 import time
@@ -151,6 +152,12 @@ def find_person_crop_candidates(repo_root: Optional[Union[str, Path]] = None) ->
             p = Path(m).resolve() / CANONICAL_PERSON_CROPS_CHECKPOINT
             candidates.append(("Standard Google Drive mount", str(p)))
 
+    # 6. User Downloads directory (browser download fallback)
+    candidates.append((
+        "User Downloads directory",
+        str(Path(os.path.expanduser("~/Downloads/r3d18_urfd_person_crops.pth")).resolve())
+    ))
+
     return candidates
 
 
@@ -209,6 +216,7 @@ def resolve_model_checkpoint(
     action_model_path: Optional[str] = None,
     fallback_action_model_path: Optional[str] = None,
     allow_baseline: bool = False,
+    auto_materialize: bool = False,
     repo_root: Optional[Union[str, Path]] = None,
 ) -> str:
     """Resolve action model weights path deterministically, strictly forbidding silent baseline fallback.
@@ -267,6 +275,7 @@ def resolve_model_checkpoint(
         return str(cand_path)
 
     # Case 2: Production person-crop model is requested (default)
+    canonical_pth = (root / CANONICAL_PERSON_CROPS_CHECKPOINT).resolve()
     candidates = find_person_crop_candidates(root)
     searched_descriptions: List[str] = []
 
@@ -275,6 +284,15 @@ def resolve_model_checkpoint(
         p = Path(cand_str)
         if p.exists() and p.is_file() and p.stat().st_size >= MIN_PLAUSIBLE_CHECKPOINT_SIZE:
             logger.info("Resolved production person-crop checkpoint from %s: %s", desc, p)
+            # Auto-materialize candidate into canonical repo models path if requested
+            if auto_materialize and p.resolve() != canonical_pth:
+                try:
+                    canonical_pth.parent.mkdir(parents=True, exist_ok=True)
+                    logger.info("Auto-materializing checkpoint to canonical path: %s -> %s", p, canonical_pth)
+                    shutil.copy2(p, canonical_pth)
+                    return str(canonical_pth)
+                except Exception as copy_err:
+                    logger.warning("Could not auto-copy to canonical path (%s); using candidate directly: %s", copy_err, p)
             return str(p)
 
     # If fallback is explicitly authorized, attempt to resolve baseline model
@@ -316,12 +334,15 @@ def resolve_model_checkpoint(
         "     export GOOGLE_DRIVE_DIR=\"/path/to/Google Drive/emergency-vision-ai\"\n"
         "   Or sync weights using the experiment synchronization tool:\n"
         "     python scripts/sync_experiment_results.py --drive-dir <path> --include-weights\n\n"
-        "2. If the checkpoint exists in another directory or disk:\n"
+        "2. If downloading from Google Drive via browser:\n"
+        "   Place the downloaded 'r3d18_urfd_person_crops.pth' in ~/Downloads/ or models/action_recognition/.\n"
+        "   The demo automatically discovers and materializes it into the canonical path.\n\n"
+        "3. If the checkpoint exists in another directory or disk:\n"
         "   Specify it via CLI:\n"
         "     python scripts/run_camera_demo.py --action-model /path/to/r3d18_urfd_person_crops.pth\n"
         "   Or set environment variable:\n"
         "     export EMERGENCY_VISION_AI_ACTION_MODEL=/path/to/r3d18_urfd_person_crops.pth\n\n"
-        "3. If intentionally testing the legacy baseline model for comparison:\n"
+        "4. If intentionally testing the legacy baseline model for comparison:\n"
         "   Pass the explicit baseline path AND the authorization flag:\n"
         "     python scripts/run_camera_demo.py --action-model models/action_recognition/r3d18_urfd_best.pth --allow-baseline\n"
         f"{sep}"
@@ -598,6 +619,7 @@ def run_camera_demo(
         action_model_path=action_model_path,
         fallback_action_model_path=fallback_action_model_path,
         allow_baseline=allow_baseline,
+        auto_materialize=True,
     )
     ckpt_meta = verify_and_print_checkpoint(action_ckpt)
 

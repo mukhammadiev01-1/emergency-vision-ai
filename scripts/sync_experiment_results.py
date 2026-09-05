@@ -43,6 +43,8 @@ GOOGLE_DRIVE_CANDIDATES = [
     os.path.expanduser("~/Google Drive/My Drive/emergency-vision-ai"),
     os.path.expanduser("~/GoogleDrive/My Drive/emergency-vision-ai"),
     "/Volumes/GoogleDrive/My Drive/emergency-vision-ai",
+    # User Downloads directory staging fallback
+    os.path.expanduser("~/Downloads/emergency-vision-ai"),
     # Google Colab native mount path
     "/content/drive/MyDrive/emergency-vision-ai",
 ]
@@ -271,6 +273,7 @@ def generate_experiment_manifest(
 def sync_experiment_results(
     drive_root: str | Path,
     dest_root: str | Path = REPO_ROOT / "experiments",
+    repo_root: str | Path = REPO_ROOT,
     experiment_name: str = CANONICAL_EXPERIMENT_NAME,
     include_weights: bool = False,
     dry_run: bool = False,
@@ -379,11 +382,35 @@ def sync_experiment_results(
 
     # 5. Optionally copy model weights if requested
     if include_weights and checkpoint_exists:
+        # 5a. Copy to experiment directory for local artifact self-containment
         target_weights = dest_dir / os.path.basename(CANONICAL_CHECKPOINT_REL_PATH)
-        logger.info("Copying model weights: %s -> %s", drive_checkpoint, target_weights)
+        logger.info("Copying model weights to experiment dir: %s -> %s", drive_checkpoint, target_weights)
         shutil.copy2(drive_checkpoint, target_weights)
+
+        # 5b. Synchronize directly to canonical repository models path
+        canonical_target = Path(repo_root) / CANONICAL_CHECKPOINT_REL_PATH
+        canonical_target.parent.mkdir(parents=True, exist_ok=True)
+        logger.info("Synchronizing model weights to canonical repo path: %s -> %s", drive_checkpoint, canonical_target)
+        shutil.copy2(drive_checkpoint, canonical_target)
+
+        # 5c. Validate SHA-256 against recorded metadata if valid hex hash
+        computed_sha = compute_sha256(canonical_target)
+        if (
+            recorded_sha
+            and len(recorded_sha) == 64
+            and all(c in "0123456789abcdefABCDEF" for c in recorded_sha)
+        ):
+            if computed_sha.lower() != recorded_sha.lower():
+                raise ValueError(
+                    f"Synchronized checkpoint SHA-256 mismatch!\n"
+                    f"Expected: {recorded_sha}\n"
+                    f"Computed: {computed_sha}"
+                )
+            logger.info("  ✓ Verified canonical checkpoint SHA-256: %s", computed_sha)
+
         checkpoint_info["copied_locally"] = True
-        checkpoint_info["local_path"] = str(target_weights)
+        checkpoint_info["local_path"] = str(canonical_target)
+        checkpoint_info["sha256"] = computed_sha
 
     # 6. Generate Experiment Manifest
     manifest = generate_experiment_manifest(
