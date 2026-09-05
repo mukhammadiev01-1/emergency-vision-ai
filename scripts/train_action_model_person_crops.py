@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 import time
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch
