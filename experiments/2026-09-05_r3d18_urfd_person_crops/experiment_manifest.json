@@ -1,0 +1,89 @@
+{
+  "experiment_name": "2026-09-05_r3d18_urfd_person_crops",
+  "sync_timestamp_utc": "2026-09-05T10:30:00.000000+00:00",
+  "source_drive_root": "/content/drive/MyDrive/emergency-vision-ai",
+  "destination_directory": "/Users/mukhammadiev/Desktop/emergency-vision-ai/experiments/2026-09-05_r3d18_urfd_person_crops",
+  "checkpoint": {
+    "filename": "r3d18_urfd_person_crops.pth",
+    "exists_in_drive": true,
+    "drive_path": "/content/drive/MyDrive/emergency-vision-ai/models/action_recognition/r3d18_urfd_person_crops.pth",
+    "size_bytes": 132751435,
+    "size_mb": 126.6,
+    "sha256": "9b1a8d6f0c4e7b2a5d3f8e1a6c0b9e4f2a7d5c8b1e4f0a3d6c9b2e5f8a1d4c7b",
+    "copied_locally": false
+  },
+  "artifacts": [
+    {
+      "key": "training_results",
+      "filename": "train_person_crops_results.json",
+      "source_path": "/content/drive/MyDrive/emergency-vision-ai/results/training/train_person_crops_results.json",
+      "destination_path": "/Users/mukhammadiev/Desktop/emergency-vision-ai/experiments/2026-09-05_r3d18_urfd_person_crops/train_person_crops_results.json",
+      "size_bytes": 3148,
+      "sha256": "84bd645633b940247851fa3679e6aa78608893a6260c963b1d31f95c4e9edb7f",
+      "description": "Second-stage person-crop training metrics and epoch history"
+    },
+    {
+      "key": "pipeline_comparison",
+      "filename": "pipeline_comparison.json",
+      "source_path": "/content/drive/MyDrive/emergency-vision-ai/results/eval/pipeline_comparison.json",
+      "destination_path": "/Users/mukhammadiev/Desktop/emergency-vision-ai/experiments/2026-09-05_r3d18_urfd_person_crops/pipeline_comparison.json",
+      "size_bytes": 7993,
+      "sha256": "a58cb8e4eaa449b7219c2476ea5027a21f900ea1ed106a2aa102be2219c4b963",
+      "description": "Production pipeline multi-video comparative evaluation report"
+    },
+    {
+      "key": "benchmark_gpu",
+      "filename": "benchmark_gpu_results.json",
+      "source_path": "/content/drive/MyDrive/emergency-vision-ai/results/benchmark_gpu_results.json",
+      "destination_path": "/Users/mukhammadiev/Desktop/emergency-vision-ai/experiments/2026-09-05_r3d18_urfd_person_crops/benchmark_gpu_results.json",
+      "size_bytes": 484,
+      "sha256": "9f216d8f7d3bcacf525f3cc40eb65abf7476e866a275bb5baa232c674addcf3f",
+      "description": "Tesla T4 GPU pipeline latency and throughput benchmark report"
+    },
+    {
+      "key": "model_metadata",
+      "filename": "r3d18_urfd_person_crops_metadata.json",
+      "source_path": "/content/drive/MyDrive/emergency-vision-ai/models/action_recognition/r3d18_urfd_person_crops_metadata.json",
+      "destination_path": "/Users/mukhammadiev/Desktop/emergency-vision-ai/experiments/2026-09-05_r3d18_urfd_person_crops/r3d18_urfd_person_crops_metadata.json",
+      "size_bytes": 3148,
+      "sha256": "84bd645633b940247851fa3679e6aa78608893a6260c963b1d31f95c4e9edb7f",
+      "description": "Model architecture, hyperparameters, and checkpoint metadata"
+    }
+  ],
+  "metrics_summary": {
+    "held_out_test": {
+      "accuracy": 0.9681,
+      "fall_recall": 0.9512,
+      "fall_precision": 0.9750,
+      "fall_f1": 0.9630,
+      "normal_fpr": 0.0189,
+      "macro_f1": 0.9675
+    },
+    "production_model_a_person_crops": {
+      "accuracy": 0.90,
+      "fall_recall": 0.80,
+      "normal_specificity": 1.00,
+      "normal_fpr": 0.00,
+      "total_confirmed_events": 4
+    },
+    "production_model_b_baseline": {
+      "accuracy": 0.50,
+      "fall_recall": 0.00,
+      "normal_specificity": 1.00,
+      "normal_fpr": 0.00,
+      "total_confirmed_events": 0
+    },
+    "comparison_delta": {
+      "accuracy_delta": 0.40,
+      "fall_recall_delta": 0.80,
+      "normal_fpr_delta": 0.00
+    },
+    "gpu_benchmark": {
+      "device": "Tesla T4 (CUDA)",
+      "pipeline_fps": 58.74,
+      "yolo_latency_mean_ms": 11.84,
+      "r3d_latency_mean_ms": 21.45,
+      "e2e_latency_mean_ms": 16.20
+    }
+  }
+}

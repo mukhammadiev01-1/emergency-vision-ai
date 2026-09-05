@@ -606,10 +606,10 @@ def compare_pipeline_models(
         gt = ra.get("ground_truth", rb.get("ground_truth", "N/A"))
         pa = ra.get("max_fall_prob", 0.0)
         pb = rb.get("max_fall_prob", 0.0)
-        ea = ra.get("confirmed_fall_events", 0)
-        eb = rb.get("confirmed_fall_events", 0)
-        ca = "YES" if ra.get("correct") else "NO"
-        cb = "YES" if rb.get("correct") else "NO"
+        ea = ra.get("confirmed_events_count", ra.get("confirmed_fall_events", 0))
+        eb = rb.get("confirmed_events_count", rb.get("confirmed_fall_events", 0))
+        ca = "YES" if (ra.get("is_correct") or ra.get("correct")) else "NO"
+        cb = "YES" if (rb.get("is_correct") or rb.get("correct")) else "NO"
 
         print(
             f"{v:<24} | {gt:<6} | {pa:<10.4f} | {pb:<10.4f} | "

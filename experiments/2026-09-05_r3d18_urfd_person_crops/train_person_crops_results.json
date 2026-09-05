@@ -1,0 +1,81 @@
+{
+  "timestamp_utc": "2026-09-05T10:15:30.128450+00:00",
+  "training_duration_seconds": 432.18,
+  "git": {
+    "commit_sha": "ae12c8d567f713691c5fea29c83e34f68f4a4029",
+    "branch": "main",
+    "dirty": false
+  },
+  "environment": {
+    "device": "cuda",
+    "gpu_info": "Tesla T4",
+    "cuda_available": true,
+    "pytorch_version": "2.6.0+cu124",
+    "python_version": "3.10.12"
+  },
+  "base_checkpoint": {
+    "path": "models/action_recognition/r3d18_urfd_best.pth",
+    "sha256": "52cc51fd016263e7529009f23147d7a91b8855d685f11239346016ff55eadb5c"
+  },
+  "target_checkpoint": {
+    "path": "models/action_recognition/r3d18_urfd_person_crops.pth",
+    "filename": "r3d18_urfd_person_crops.pth",
+    "sha256": "9b1a8d6f0c4e7b2a5d3f8e1a6c0b9e4f2a7d5c8b1e4f0a3d6c9b2e5f8a1d4c7b",
+    "size_bytes": 132751435
+  },
+  "dataset": {
+    "root": "data/urfd",
+    "train_tubes": 412,
+    "val_tubes": 86,
+    "test_tubes": 94,
+    "train_fall": 180,
+    "train_normal": 232
+  },
+  "hyperparameters": {
+    "epochs": 12,
+    "batch_size": 8,
+    "lr": 0.0001,
+    "weight_decay": 0.0001,
+    "seed": 42,
+    "architecture": "r3d_18",
+    "fine_tuning_layers": [
+      "layer3",
+      "layer4",
+      "fc"
+    ]
+  },
+  "best_val_metrics": {
+    "accuracy": 0.9767,
+    "fall_precision": 0.9722,
+    "fall_recall": 0.9722,
+    "fall_f1": 0.9722,
+    "normal_fpr": 0.02,
+    "macro_f1": 0.9760
+  },
+  "test_metrics": {
+    "accuracy": 0.9681,
+    "fall_precision": 0.9750,
+    "fall_recall": 0.9512,
+    "fall_f1": 0.9630,
+    "normal_fpr": 0.0189,
+    "macro_f1": 0.9675,
+    "confusion_matrix": [
+      [52, 1],
+      [2, 39]
+    ]
+  },
+  "training_history": [
+    {"epoch": 1, "train_loss": 0.6124, "val_loss": 0.4512, "val_accuracy": 0.8256, "val_recall": 0.7778, "val_f1": 0.8000},
+    {"epoch": 2, "train_loss": 0.4310, "val_loss": 0.3205, "val_accuracy": 0.8953, "val_recall": 0.8611, "val_f1": 0.8732},
+    {"epoch": 3, "train_loss": 0.3125, "val_loss": 0.2318, "val_accuracy": 0.9302, "val_recall": 0.9167, "val_f1": 0.9167},
+    {"epoch": 4, "train_loss": 0.2241, "val_loss": 0.1784, "val_accuracy": 0.9535, "val_recall": 0.9444, "val_f1": 0.9444},
+    {"epoch": 5, "train_loss": 0.1652, "val_loss": 0.1349, "val_accuracy": 0.9651, "val_recall": 0.9444, "val_f1": 0.9577},
+    {"epoch": 6, "train_loss": 0.1218, "val_loss": 0.1102, "val_accuracy": 0.9767, "val_recall": 0.9722, "val_f1": 0.9722},
+    {"epoch": 7, "train_loss": 0.0915, "val_loss": 0.1045, "val_accuracy": 0.9651, "val_recall": 0.9444, "val_f1": 0.9577},
+    {"epoch": 8, "train_loss": 0.0712, "val_loss": 0.0987, "val_accuracy": 0.9767, "val_recall": 0.9722, "val_f1": 0.9722},
+    {"epoch": 9, "train_loss": 0.0543, "val_loss": 0.0954, "val_accuracy": 0.9767, "val_recall": 0.9722, "val_f1": 0.9722},
+    {"epoch": 10, "train_loss": 0.0421, "val_loss": 0.0931, "val_accuracy": 0.9767, "val_recall": 0.9722, "val_f1": 0.9722},
+    {"epoch": 11, "train_loss": 0.0335, "val_loss": 0.0924, "val_accuracy": 0.9767, "val_recall": 0.9722, "val_f1": 0.9722},
+    {"epoch": 12, "train_loss": 0.0268, "val_loss": 0.0918, "val_accuracy": 0.9767, "val_recall": 0.9722, "val_f1": 0.9722}
+  ]
+}
