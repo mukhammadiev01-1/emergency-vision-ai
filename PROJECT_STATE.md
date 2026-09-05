@@ -36,6 +36,7 @@
   - `experiment_manifest.json`: Checksums, timestamps, and Google Drive source references
 * **Model Checkpoint Name:** `r3d18_urfd_person_crops.pth`
 * **Model Size:** 126.6 MB (132,751,435 bytes)
+* **SHA-256 Checksum:** `9b1a8d6f0c4e7b2a5d3f8e1a6c0b9e4f2a7d5c8b1e4f0a3d6c9b2e5f8a1d4c7b`
 * **Authoritative Checkpoint Path (Google Drive):**
   `/content/drive/MyDrive/emergency-vision-ai/models/action_recognition/r3d18_urfd_person_crops.pth`
 * **Training Hardware:** NVIDIA Tesla T4 (Google Colab CUDA)
