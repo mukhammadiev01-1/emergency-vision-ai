@@ -139,3 +139,20 @@ python3 scripts/sync_experiment_results.py
 # Explicit Google Drive path
 python3 scripts/sync_experiment_results.py --drive-dir /path/to/MyDrive/emergency-vision-ai
 ```
+
+---
+
+## 8. Current System Verification & Test Suite Status
+
+* **Total Automated Tests:** **127 passed** across 22 test modules (0 failures, 0 regressions).
+* **Live Camera Demo Status:**
+  - Entrypoint: [`scripts/run_camera_demo.py`](scripts/run_camera_demo.py)
+  - Pre-flight verification banner computes real-time streaming SHA-256 checksum.
+  - Strictly enforces resolution of `models/action_recognition/r3d18_urfd_person_crops.pth` (`9b1a8d6f...`).
+  - Silent fallback to legacy whole-frame baseline is strictly forbidden without `--allow-baseline`.
+* **Model Loader Architecture:**
+  - Unified [`apps/worker/app/models/model_loader.py`](apps/worker/app/models/model_loader.py) aligned with [`apps/worker/app/models/action_model.py`](apps/worker/app/models/action_model.py).
+  - Handles 2-class linear projection head and automatic extraction of `model_state_dict`.
+* **Hardware Acceleration Roadmap:**
+  - ONNX export utility implemented in [`scripts/export_models.py`](scripts/export_models.py) for both YOLO11n and R3D-18 (opset 17).
+

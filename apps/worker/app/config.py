@@ -11,7 +11,7 @@ class WorkerSettings(BaseSettings):
 
     # Models configuration
     DETECTION_MODEL_PATH: str = "models/detection/yolo11n.pt"
-    ACTION_MODEL_PATH: Optional[str] = "models/action_recognition/r3d18_urfd_best.pth"
+    ACTION_MODEL_PATH: Optional[str] = "models/action_recognition/r3d18_urfd_person_crops.pth"
     TRACKER_TYPE: str = "bytetrack.yaml"
 
     # Detection parameters

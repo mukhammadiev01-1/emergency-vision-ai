@@ -78,7 +78,7 @@ def generate_synthetic_fall_video(output_path: str, num_frames: int = 60) -> str
 
 def run_benchmark(
     video_path: Optional[str] = None,
-    action_model_path: str = "models/action_recognition/r3d18_urfd_best.pth",
+    action_model_path: Optional[str] = None,
     yolo_model_path: str = "models/detection/yolo11n.pt",
     device_str: str = "cuda",
     max_frames: int = 0,
@@ -92,6 +92,12 @@ def run_benchmark(
     output_json_path: Optional[str] = None,
 ) -> dict:
     """Run full production pipeline benchmark and return structured metrics."""
+    if not action_model_path:
+        action_model_path = (
+            "models/action_recognition/r3d18_urfd_person_crops.pth"
+            if os.path.exists("models/action_recognition/r3d18_urfd_person_crops.pth")
+            else "models/action_recognition/r3d18_urfd_best.pth"
+        )
     device = resolve_device(device_str)
     device_name = (
         torch.cuda.get_device_name(0)
@@ -332,9 +338,14 @@ def run_benchmark(
 
 
 def main():
+    default_action = (
+        "models/action_recognition/r3d18_urfd_person_crops.pth"
+        if os.path.exists("models/action_recognition/r3d18_urfd_person_crops.pth")
+        else "models/action_recognition/r3d18_urfd_best.pth"
+    )
     parser = argparse.ArgumentParser(description="Canonical Action Recognition Pipeline Benchmark")
     parser.add_argument("--video", type=str, default=None, help="Path to input video file")
-    parser.add_argument("--action-model", type=str, default="models/action_recognition/r3d18_urfd_best.pth", help="Path to R3D-18 weights")
+    parser.add_argument("--action-model", type=str, default=default_action, help="Path to R3D-18 weights")
     parser.add_argument("--yolo-model", type=str, default="models/detection/yolo11n.pt", help="Path to YOLO weights")
     parser.add_argument("--device", type=str, default="cuda", help="Target device: cuda, mps, cpu")
     parser.add_argument("--max-frames", type=int, default=0, help="Max frames to process (0 = all)")

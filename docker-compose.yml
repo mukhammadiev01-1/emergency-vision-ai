@@ -45,12 +45,14 @@ services:
     environment:
       - WORKER_DEVICE=cpu
       - DETECTION_MODEL_PATH=models/detection/yolo11n.pt
+      - ACTION_MODEL_PATH=models/action_recognition/r3d18_urfd_person_crops.pth
+      - ENABLE_ACTION_RECOGNITION=true
+      - ACTION_CONFIDENCE_THRESHOLD=0.70
+      - ACTION_CONSECUTIVE_WINDOWS=2
       - VIDEO_SOURCE=0
       - EVENT_PUBLISHER_TYPE=redis
       - REDIS_URL=redis://redis:6379/0
       - REDIS_STREAM_NAME=emergency_vision:events
-      - REDIS_CONSUMER_GROUP=api_group
-      - REDIS_CONSUMER_NAME=api_consumer_1
     depends_on:
       redis:
         condition: service_healthy

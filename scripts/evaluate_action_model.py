@@ -89,11 +89,16 @@ def evaluate_checkpoint(
     # Load checkpoint
     logger.info("Loading model checkpoint from %s on %s...", checkpoint_path, device)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    num_classes = checkpoint.get("num_classes", 2)
+    num_classes = checkpoint.get("num_classes", 2) if isinstance(checkpoint, dict) else 2
 
     model = r3d_18()
     model.fc = nn.Linear(model.fc.in_features, num_classes)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    state_dict = (
+        checkpoint["model_state_dict"]
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint
+        else checkpoint
+    )
+    model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
 

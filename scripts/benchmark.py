@@ -1,6 +1,7 @@
 """Model and Pipeline Latency & FPS Benchmarking Script."""
 import argparse
 import logging
+import os
 import time
 from typing import List
 import numpy as np
@@ -60,8 +61,9 @@ def benchmark_model(
 
 
 def main():
+    default_model = "models/detection/yolo11n.pt" if os.path.exists("models/detection/yolo11n.pt") else "yolo11n.pt"
     parser = argparse.ArgumentParser(description="Benchmark vision model inference")
-    parser.add_argument("--model", type=str, default="yolo11n.pt", help="Model path (.pt or .onnx)")
+    parser.add_argument("--model", type=str, default=default_model, help="Model path (.pt or .onnx)")
     parser.add_argument("--device", type=str, default="cpu", help="Target device (cpu/cuda/mps)")
     parser.add_argument("--imgsz", type=int, default=640, help="Image resolution")
     parser.add_argument("--iterations", type=int, default=100, help="Number of benchmark iterations")
