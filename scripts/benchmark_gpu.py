@@ -12,6 +12,7 @@ Measures with hardware synchronization:
 """
 import argparse
 from datetime import datetime, timezone
+import json
 import logging
 import os
 import sys
@@ -88,6 +89,7 @@ def run_benchmark(
     crop_padding_ratio: float = 0.05,
     stale_track_timeout: float = 3.0,
     inference_interval: int = 8,
+    output_json_path: Optional[str] = None,
 ) -> dict:
     """Run full production pipeline benchmark and return structured metrics."""
     device = resolve_device(device_str)
@@ -308,7 +310,7 @@ def run_benchmark(
         print(f"    [{idx}] Frame: {ev['frame_idx']:03d} | Track ID: {ev['track_id']} | Conf: {ev['confidence']*100:.1f}% | Center: {ev['position']}")
     print("=" * 80 + "\n")
 
-    return {
+    benchmark_results = {
         "device": device_name,
         "processed_frames": frame_idx,
         "pipeline_fps": pipeline_fps,
@@ -319,6 +321,14 @@ def run_benchmark(
         "r3d_latency": {"mean_ms": r3d_mean, "p50_ms": r3d_p50, "p95_ms": r3d_p95},
         "e2e_latency": {"mean_ms": e2e_mean, "p50_ms": e2e_p50, "p95_ms": e2e_p95},
     }
+
+    if output_json_path:
+        os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)
+        with open(output_json_path, "w") as jf:
+            json.dump(benchmark_results, jf, indent=2)
+        logger.info("Saved benchmark JSON report to: %s", output_json_path)
+
+    return benchmark_results
 
 
 def main():
@@ -331,6 +341,7 @@ def main():
     parser.add_argument("--warmup", type=int, default=5, help="Warmup iterations")
     parser.add_argument("--threshold", type=float, default=0.70, help="Action confidence threshold")
     parser.add_argument("--interval", type=int, default=8, help="Inference cadence interval")
+    parser.add_argument("--output-json", type=str, default=None, help="Optional output JSON path")
     args = parser.parse_args()
 
     run_benchmark(
@@ -342,6 +353,7 @@ def main():
         warmup_iterations=args.warmup,
         conf_threshold=args.threshold,
         inference_interval=args.interval,
+        output_json_path=args.output_json,
     )
 
 

@@ -139,46 +139,55 @@ The **UR Fall Detection (URFD)** dataset (30 Fall and 40 Normal ADL sequences) i
 - Local/Drive path: `data/urfd/`
 - Download tool: `python3 scripts/download_urfd.py --format mp4`
 
-### 3. Model Training
-The action recognition model was trained on URFD using two-stage transfer learning:
-- **Backbone**: `ResNet3D-18` initialized with official Torchvision Kinetics-400 pre-trained weights (`R3D_18_Weights.DEFAULT`).
-- **Stage 1 (Head Warm-up)**: Backbone frozen, custom binary classifier head (`fc: 512 -> 2`) trained with AdamW.
-- **Stage 2 (Fine-tuning)**: Differential learning rates with Layer 3 and Layer 4 unfrozen.
-- **Data Splitting**: Strict sequence-level isolation (70% train / 15% val / 15% test, Seed=42) preventing temporal data leakage.
+### 3. Production Person-Crop Action Training (Second-Stage)
+To align training with the production pipeline representation (where R3D-18 operates on tight YOLO/ByteTrack person crops with 5% padding), a dedicated second-stage transfer learning pipeline is provided:
+- **Tube Extraction**: YOLO11n + ByteTrack extracts 16-frame rolling person crops from URFD videos.
+- **Hard Negative Mining**: Upright walking prior to fall descent is labeled `NORMAL (0)`; descent and floor landing are labeled `FALL (1)`.
+- **Sequence Isolation**: Strict sequence-level isolation (Seed=42: 49 train, 10 val, 11 test) prevents cross-frame temporal data leakage.
+- **Backbone Fine-tuning**: Starts from canonical weights `models/action_recognition/r3d18_urfd_best.pth`, unfreezing `layer3`, `layer4`, and `fc` with differential learning rates.
+- **Artifact Safety**: Saves to `models/action_recognition/r3d18_urfd_person_crops.pth` with full metadata JSON and automatic Google Drive backup. Canonical base weights are never overwritten.
 
-To re-train:
+To train with one command:
 ```bash
-python3 scripts/train_action_model.py \
+python3 scripts/train_person_crop_pipeline.py \
     --dataset-root data/urfd \
+    --base-checkpoint models/action_recognition/r3d18_urfd_best.pth \
+    --yolo-model models/detection/yolo11n.pt \
     --output-dir models/action_recognition \
-    --checkpoint-name r3d18_urfd_best.pth \
-    --stage1-epochs 5 \
-    --stage2-epochs 20 \
-    --batch-size 4 \
-    --device cuda
-```
-
-### 4. Model Evaluation
-Evaluate the canonical checkpoint against the held-out test split:
-```bash
-python3 scripts/evaluate_action_model.py \
-    --checkpoint models/action_recognition/r3d18_urfd_best.pth \
-    --dataset-root data/urfd \
+    --checkpoint-name r3d18_urfd_person_crops.pth \
+    --epochs 12 \
+    --batch-size 8 \
+    --lr 1e-4 \
     --device cuda \
     --seed 42
 ```
+
+### 4. Production Pipeline Multi-Video Comparative Evaluation
+Evaluate both checkpoints side-by-side using the **actual production pipeline** (YOLO11n → ByteTrack → Person Crop → R3D-18 → Temporal Confirmation) on multi-video splits:
+```bash
+python3 scripts/evaluate_production_pipeline.py \
+    --action-model models/action_recognition/r3d18_urfd_person_crops.pth \
+    --compare-with models/action_recognition/r3d18_urfd_best.pth \
+    --dataset-root data/urfd \
+    --max-fall-videos 5 \
+    --max-normal-videos 5 \
+    --device cuda \
+    --output-json results/eval/pipeline_comparison.json
+```
+Reports per-video max $P(\text{FALL})$, mean $P(\text{FALL})$, confirmed events, video accuracy, FALL recall, and NORMAL false positive rate.
 
 ### 5. Production Pipeline GPU Benchmark
 Run the canonical hardware benchmark with CUDA synchronization:
 ```bash
 python3 scripts/benchmark_gpu.py \
     --video data/urfd/videos/fall/fall-01-cam0.mp4 \
-    --action-model models/action_recognition/r3d18_urfd_best.pth \
+    --action-model models/action_recognition/r3d18_urfd_person_crops.pth \
     --yolo-model models/detection/yolo11n.pt \
     --device cuda \
     --threshold 0.70 \
     --interval 8 \
-    --warmup 5
+    --warmup 5 \
+    --output-json results/benchmark_gpu_results.json
 ```
 Metrics measured:
 - YOLO11n Detection + ByteTrack latency (Mean, P50, P95)
@@ -187,16 +196,14 @@ Metrics measured:
 - End-to-end frame latency (Mean, P50, P95)
 - Total pipeline throughput (FPS)
 
-### 6. Google Colab Workflow
-Open [`notebooks/08_urfd_training_colab.ipynb`](notebooks/08_urfd_training_colab.ipynb) in Google Colab on a Tesla T4 GPU:
-- **Cell 1**: Mount Google Drive & check CUDA GPU.
-- **Cell 2**: Clone/update repository to `/content/emergency-vision-ai`.
-- **Cell 3**: Install worker dependencies.
-- **Cell 4**: Verify production module imports.
-- **Cell 5**: Verify canonical checkpoint & URFD dataset structure.
-- **Cell 6**: Action model forward pass smoke test on CUDA.
-- **Cell 7**: Model evaluation on held-out test split.
-- **Cell 8**: Production GPU benchmark using `scripts/benchmark_gpu.py`.
+### 6. Google Colab GPU Workflow & Single Source of Truth
+The canonical Colab notebook [`notebooks/08_urfd_training_colab.ipynb`](notebooks/08_urfd_training_colab.ipynb) is a thin orchestrator backed by version-controlled Python scripts:
+1. **Cell 1 — Bootstrap**: Mounts Google Drive (`/content/drive`), syncs GitHub repository (`/content/emergency-vision-ai`), pulls Git LFS checkpoints, installs dependencies, validates Drive dataset (`30 FALL + 40 NORMAL`), and creates idempotent symlinks via `python scripts/colab_bootstrap.py`.
+2. **Cell 2 — Status & Environment Report**: Validates GPU accelerator (Tesla T4), memory, and models.
+3. **Cell 3 — ONE-CLICK Training**: Runs `train_person_crop_pipeline.py` with automatic Drive backup.
+4. **Cell 4 — Comparative Evaluation**: Runs `evaluate_production_pipeline.py --compare-with` on `fall-01..05` & `adl-01..05`.
+5. **Cell 5 — Production Benchmark**: Executes `benchmark_gpu.py` on Tesla T4 GPU.
+6. **Cell 6 — Artifact Summary**: Verifies saved checkpoints, hashes, and Drive backups.
 
 ---
 
@@ -237,7 +244,7 @@ uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 🧪 Testing
 
-Run the full automated test suite (63 unit & integration tests):
+Run the full automated test suite (82 unit & integration tests):
 ```bash
 .venv/bin/pytest -v
 ```

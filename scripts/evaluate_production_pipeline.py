@@ -530,10 +530,138 @@ def run_pipeline_evaluation(
     return summary_payload
 
 
+def compare_pipeline_models(
+    model_a_path: str,
+    model_b_path: str,
+    dataset_root: str = "data/urfd",
+    yolo_model_path: str = "models/detection/yolo11n.pt",
+    device_str: str = "cuda",
+    conf_threshold: float = 0.70,
+    consecutive_required: int = 2,
+    cooldown_seconds: float = 5.0,
+    inference_interval: int = 8,
+    crop_padding_ratio: float = 0.05,
+    stale_track_timeout: float = 3.0,
+    max_fall_videos: int = 5,
+    max_normal_videos: int = 5,
+    specific_videos: Optional[List[str]] = None,
+    output_json_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run comparative production pipeline evaluation between two action recognition checkpoints."""
+    print("=" * 110)
+    print("      EMERGENCY VISION AI — PRODUCTION PIPELINE COMPARATIVE EVALUATION")
+    print("=" * 110)
+    print(f"Model A (Target / Evaluated): {model_a_path}")
+    print(f"Model B (Reference / Baseline): {model_b_path}")
+    print("=" * 110)
+
+    logger.info(">>> Evaluating Model A: %s", model_a_path)
+    res_a = run_pipeline_evaluation(
+        dataset_root=dataset_root,
+        action_model_path=model_a_path,
+        yolo_model_path=yolo_model_path,
+        device_str=device_str,
+        conf_threshold=conf_threshold,
+        consecutive_required=consecutive_required,
+        cooldown_seconds=cooldown_seconds,
+        inference_interval=inference_interval,
+        crop_padding_ratio=crop_padding_ratio,
+        stale_track_timeout=stale_track_timeout,
+        max_fall_videos=max_fall_videos,
+        max_normal_videos=max_normal_videos,
+        specific_videos=specific_videos,
+        diagnostic_timeline=False,
+    )
+
+    logger.info(">>> Evaluating Model B: %s", model_b_path)
+    res_b = run_pipeline_evaluation(
+        dataset_root=dataset_root,
+        action_model_path=model_b_path,
+        yolo_model_path=yolo_model_path,
+        device_str=device_str,
+        conf_threshold=conf_threshold,
+        consecutive_required=consecutive_required,
+        cooldown_seconds=cooldown_seconds,
+        inference_interval=inference_interval,
+        crop_padding_ratio=crop_padding_ratio,
+        stale_track_timeout=stale_track_timeout,
+        max_fall_videos=max_fall_videos,
+        max_normal_videos=max_normal_videos,
+        specific_videos=specific_videos,
+        diagnostic_timeline=False,
+    )
+
+    # Build per-video comparison
+    map_a = {r["video_name"]: r for r in res_a["video_results"]}
+    map_b = {r["video_name"]: r for r in res_b["video_results"]}
+
+    print("\n" + "=" * 115)
+    print(f"{'Video Filename':<24} | {'GT':<6} | {'Max P(A)':<10} | {'Max P(B)':<10} | {'Events (A/B)':<12} | {'Correct (A/B)':<14}")
+    print("-" * 115)
+
+    all_vids = sorted(list(set(map_a.keys()) | set(map_b.keys())))
+    for v in all_vids:
+        ra = map_a.get(v, {})
+        rb = map_b.get(v, {})
+        gt = ra.get("ground_truth", rb.get("ground_truth", "N/A"))
+        pa = ra.get("max_fall_prob", 0.0)
+        pb = rb.get("max_fall_prob", 0.0)
+        ea = ra.get("confirmed_fall_events", 0)
+        eb = rb.get("confirmed_fall_events", 0)
+        ca = "YES" if ra.get("correct") else "NO"
+        cb = "YES" if rb.get("correct") else "NO"
+
+        print(
+            f"{v:<24} | {gt:<6} | {pa:<10.4f} | {pb:<10.4f} | "
+            f"{f'{ea} / {eb}':<12} | {f'{ca} / {cb}':<14}"
+        )
+
+    print("-" * 115)
+    ma = res_a["metrics"]
+    mb = res_b["metrics"]
+
+    print("\nAGGREGATE PRODUCTION METRICS COMPARISON:")
+    print(f"  • Overall Video Accuracy     : Model A: {ma['accuracy']*100:6.2f}%  vs  Model B: {mb['accuracy']*100:6.2f}%")
+    print(f"  • FALL Recall (Sensitivity)  : Model A: {ma['fall_recall']*100:6.2f}%  vs  Model B: {mb['fall_recall']*100:6.2f}%")
+    print(f"  • NORMAL Specificity         : Model A: {ma['normal_specificity']*100:6.2f}%  vs  Model B: {mb['normal_specificity']*100:6.2f}%")
+    print(f"  • NORMAL False Positive Rate : Model A: {ma['normal_fpr']*100:6.2f}%  vs  Model B: {mb['normal_fpr']*100:6.2f}%")
+    print(f"  • Confirmed Emergency Events : Model A: {ma['total_confirmed_events']:6d}   vs  Model B: {mb['total_confirmed_events']:6d}")
+    print(f"  • Mean Pipeline FPS          : Model A: {ma['average_fps']:6.2f}   vs  Model B: {mb['average_fps']:6.2f}")
+    print("=" * 115 + "\n")
+
+    comparison_report = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "model_a": {
+            "path": model_a_path,
+            "metrics": ma,
+            "video_results": res_a["video_results"],
+        },
+        "model_b": {
+            "path": model_b_path,
+            "metrics": mb,
+            "video_results": res_b["video_results"],
+        },
+        "comparison_delta": {
+            "accuracy_delta": round(ma["accuracy"] - mb["accuracy"], 4),
+            "fall_recall_delta": round(ma["fall_recall"] - mb["fall_recall"], 4),
+            "normal_fpr_delta": round(ma["normal_fpr"] - mb["normal_fpr"], 4),
+        },
+    }
+
+    if output_json_path:
+        os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)
+        with open(output_json_path, "w") as jf:
+            json.dump(comparison_report, jf, indent=2)
+        logger.info("Saved comparative evaluation report to: %s", output_json_path)
+
+    return comparison_report
+
+
 def main():
     parser = argparse.ArgumentParser(description="Emergency Vision AI Production Pipeline Multi-Video Evaluator")
     parser.add_argument("--dataset-root", type=str, default="data/urfd", help="Root directory containing URFD dataset")
-    parser.add_argument("--action-model", type=str, default="models/action_recognition/r3d18_urfd_best.pth", help="Path to R3D-18 weights")
+    parser.add_argument("--action-model", type=str, default="models/action_recognition/r3d18_urfd_person_crops.pth", help="Path to primary R3D-18 weights")
+    parser.add_argument("--compare-with", type=str, default=None, help="Optional path to second model checkpoint to run side-by-side comparison")
     parser.add_argument("--yolo-model", type=str, default="models/detection/yolo11n.pt", help="Path to YOLO11n detector weights")
     parser.add_argument("--device", type=str, default="cuda", help="Compute device (cuda, mps, cpu)")
     parser.add_argument("--conf-threshold", type=float, default=0.70, help="Confidence threshold for FALL confirmation")
@@ -552,24 +680,44 @@ def main():
 
     specific_list = [s.strip() for s in args.specific_videos.split(",")] if args.specific_videos else None
 
-    run_pipeline_evaluation(
-        dataset_root=args.dataset_root,
-        action_model_path=args.action_model,
-        yolo_model_path=args.yolo_model,
-        device_str=args.device,
-        conf_threshold=args.conf_threshold,
-        consecutive_required=args.consecutive_windows,
-        cooldown_seconds=args.cooldown_seconds,
-        inference_interval=args.inference_interval,
-        crop_padding_ratio=args.crop_padding,
-        stale_track_timeout=args.stale_timeout,
-        max_fall_videos=args.max_fall_videos,
-        max_normal_videos=args.max_normal_videos,
-        specific_videos=specific_list,
-        diagnostic_timeline=not args.no_diagnostic,
-        output_json_path=args.output_json,
-    )
+    if args.compare_with:
+        compare_pipeline_models(
+            model_a_path=args.action_model,
+            model_b_path=args.compare_with,
+            dataset_root=args.dataset_root,
+            yolo_model_path=args.yolo_model,
+            device_str=args.device,
+            conf_threshold=args.conf_threshold,
+            consecutive_required=args.consecutive_windows,
+            cooldown_seconds=args.cooldown_seconds,
+            inference_interval=args.inference_interval,
+            crop_padding_ratio=args.crop_padding,
+            stale_track_timeout=args.stale_timeout,
+            max_fall_videos=args.max_fall_videos,
+            max_normal_videos=args.max_normal_videos,
+            specific_videos=specific_list,
+            output_json_path=args.output_json,
+        )
+    else:
+        run_pipeline_evaluation(
+            dataset_root=args.dataset_root,
+            action_model_path=args.action_model,
+            yolo_model_path=args.yolo_model,
+            device_str=args.device,
+            conf_threshold=args.conf_threshold,
+            consecutive_required=args.consecutive_windows,
+            cooldown_seconds=args.cooldown_seconds,
+            inference_interval=args.inference_interval,
+            crop_padding_ratio=args.crop_padding,
+            stale_track_timeout=args.stale_timeout,
+            max_fall_videos=args.max_fall_videos,
+            max_normal_videos=args.max_normal_videos,
+            specific_videos=specific_list,
+            diagnostic_timeline=not args.no_diagnostic,
+            output_json_path=args.output_json,
+        )
 
 
 if __name__ == "__main__":
     main()
+

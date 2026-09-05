@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+"""Emergency Vision AI — Second-Stage Person-Crop Action Training Orchestrator.
+
+End-to-end training entrypoint aligning model representation with production inference:
+    URFD Video -> YOLO11n + ByteTrack -> Person Crop (5% pad) -> 16-Frame Tube -> R3D-18 Classifier.
+
+Features:
+- Preserves strict sequence-level isolation (Seed=42) across train (49), val (10), test (11).
+- Hard negative mining: upright walking in fall videos labeled NORMAL (0), descent/landing labeled FALL (1).
+- Initializes weights from canonical checkpoint `models/action_recognition/r3d18_urfd_best.pth`.
+- Saves new trained model as `models/action_recognition/r3d18_urfd_person_crops.pth` (NEVER overwrites canonical base).
+- Generates comprehensive metadata JSON tracking Git commit SHA, checkpoint hashes, hardware, versions, metrics.
+- Automatically backs up checkpoint and metadata to Google Drive when available.
+"""
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from torchvision.models.video import r3d_18
+
+# Ensure workspace root is in sys.path
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+from apps.worker.app.datasets.person_crop_dataset import (
+    PersonCropDataset,
+    build_person_crop_splits,
+)
+from apps.worker.app.datasets.urfd_dataset import (
+    CLASS_NAMES,
+    LABEL_FALL,
+    LABEL_NORMAL,
+)
+from apps.worker.app.models.yolo import YOLOModelWrapper
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("train_person_crops_pipeline")
+
+
+def compute_sha256(filepath: str) -> str:
+    """Compute SHA-256 hex digest for a file."""
+    if not os.path.exists(filepath):
+        return "N/A"
+    h = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def get_git_metadata(repo_dir: str) -> Dict[str, str]:
+    """Extract current Git commit hash and branch."""
+    try:
+        commit_sha = subprocess.check_output(
+            ["git", "-C", repo_dir, "rev-parse", "HEAD"], text=True
+        ).strip()
+        branch = subprocess.check_output(
+            ["git", "-C", repo_dir, "rev-parse", "--abbrev-ref", "HEAD"], text=True
+        ).strip()
+        return {"commit_sha": commit_sha, "branch": branch}
+    except Exception:
+        return {"commit_sha": "unknown", "branch": "unknown"}
+
+
+def resolve_device(requested_device: str) -> str:
+    """Resolve compute accelerator with safe fallbacks."""
+    req = requested_device.lower()
+    if req == "cuda" and torch.cuda.is_available():
+        return "cuda"
+    elif req == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    elif req in ("cuda", "mps"):
+        logger.warning("Requested device '%s' unavailable; falling back to CPU.", req)
+        return "cpu"
+    return "cpu"
+
+
+def get_environment_info(device: str) -> Dict[str, Any]:
+    """Collect hardware and software runtime details."""
+    import torchvision
+    import ultralytics
+    import cv2
+
+    gpu_info = "None"
+    if device == "cuda" and torch.cuda.is_available():
+        gpu_info = f"{torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB)"
+    elif device == "mps":
+        gpu_info = "Apple Silicon (MPS)"
+
+    return {
+        "python_version": sys.version.split()[0],
+        "torch_version": torch.__version__,
+        "torchvision_version": torchvision.__version__,
+        "ultralytics_version": ultralytics.__version__,
+        "opencv_version": cv2.__version__,
+        "device": device,
+        "gpu_info": gpu_info,
+    }
+
+
+def calculate_metrics(labels: np.ndarray, predictions: np.ndarray, num_classes: int = 2) -> Dict[str, Any]:
+    """Calculate accuracy, precision, recall, F1, and confusion matrix."""
+    cm = np.zeros((num_classes, num_classes), dtype=np.int64)
+    for l, p in zip(labels, predictions):
+        if 0 <= l < num_classes and 0 <= p < num_classes:
+            cm[l, p] += 1
+
+    total = np.sum(cm)
+    correct = np.trace(cm)
+    accuracy = float(correct / total) if total > 0 else 0.0
+
+    precisions = []
+    recalls = []
+    f1s = []
+
+    for c in range(num_classes):
+        tp = cm[c, c]
+        fp = np.sum(cm[:, c]) - tp
+        fn = np.sum(cm[c, :]) - tp
+
+        prec = float(tp / (tp + fp)) if (tp + fp) > 0 else 0.0
+        rec = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+        f1 = float(2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
+
+        precisions.append(prec)
+        recalls.append(rec)
+        f1s.append(f1)
+
+    macro_f1 = float(np.mean(f1s))
+    tn = cm[LABEL_NORMAL, LABEL_NORMAL]
+    fp = cm[LABEL_NORMAL, LABEL_FALL]
+    normal_fpr = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
+
+    return {
+        "accuracy": accuracy,
+        "fall_precision": precisions[LABEL_FALL],
+        "fall_recall": recalls[LABEL_FALL],
+        "fall_f1": f1s[LABEL_FALL],
+        "normal_precision": precisions[LABEL_NORMAL],
+        "normal_recall": recalls[LABEL_NORMAL],
+        "normal_f1": f1s[LABEL_NORMAL],
+        "normal_fpr": normal_fpr,
+        "macro_f1": macro_f1,
+        "confusion_matrix": cm,
+    }
+
+
+def load_model_from_checkpoint(
+    checkpoint_path: str,
+    num_classes: int = 2,
+    device: str = "cpu",
+) -> nn.Module:
+    """Instantiate R3D-18 and load weights from existing canonical checkpoint."""
+    model = r3d_18()
+    in_features = model.fc.in_features
+    model.fc = nn.Linear(in_features, num_classes)
+
+    if os.path.exists(checkpoint_path):
+        logger.info("Loading initial weights from canonical checkpoint: %s", checkpoint_path)
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        state_dict = ckpt.get("model_state_dict", ckpt)
+        clean_state = {k.replace("module.", ""): v for k, v in state_dict.items()}
+        model.load_state_dict(clean_state, strict=False)
+        logger.info("Successfully transferred initial weights into R3D-18 backbone.")
+    else:
+        logger.warning("Checkpoint %s not found; initializing with default torchvision weights.", checkpoint_path)
+
+    return model.to(device)
+
+
+def evaluate_split(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: str = "cpu",
+) -> Tuple[float, Dict[str, Any]]:
+    """Evaluate model on a DataLoader split and return average loss and metrics."""
+    model.eval()
+    total_loss = 0.0
+    all_labels = []
+    all_preds = []
+
+    with torch.no_grad():
+        for videos, labels in loader:
+            videos = videos.to(device)
+            labels = labels.to(device)
+
+            outputs = model(videos)
+            loss = criterion(outputs, labels)
+            total_loss += loss.item() * labels.size(0)
+
+            preds = torch.argmax(outputs, dim=1)
+            all_labels.extend(labels.cpu().numpy())
+            all_preds.extend(preds.cpu().numpy())
+
+    avg_loss = total_loss / len(all_labels) if all_labels else 0.0
+    metrics = calculate_metrics(np.array(all_labels), np.array(all_preds))
+    return avg_loss, metrics
+
+
+def train_person_crop_pipeline(
+    dataset_root: str = "data/urfd",
+    base_checkpoint: str = "models/action_recognition/r3d18_urfd_best.pth",
+    yolo_model_path: str = "models/detection/yolo11n.pt",
+    output_dir: str = "models/action_recognition",
+    checkpoint_name: str = "r3d18_urfd_person_crops.pth",
+    results_dir: str = "results/training",
+    drive_backup_dir: Optional[str] = None,
+    epochs: int = 12,
+    batch_size: int = 8,
+    lr: float = 1e-4,
+    weight_decay: float = 1e-4,
+    device_str: str = "cuda",
+    seed: int = 42,
+    cache_dir: str = ".cache/person_crops",
+    force_rebuild: bool = False,
+) -> Dict[str, Any]:
+    """Complete orchestrated training workflow for production-aligned person crops."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    device = resolve_device(device_str)
+
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
+    target_checkpoint = os.path.join(output_dir, checkpoint_name)
+    target_metadata_path = os.path.join(
+        output_dir, checkpoint_name.replace(".pth", "_metadata.json")
+    )
+    results_json_path = os.path.join(results_dir, "train_person_crops_results.json")
+
+    # If drive backup dir not specified, check canonical Colab Drive path
+    colab_default_drive = "/content/drive/MyDrive/emergency-vision-ai/models/action_recognition"
+    if not drive_backup_dir and os.path.exists("/content/drive/MyDrive/emergency-vision-ai"):
+        drive_backup_dir = colab_default_drive
+
+    git_info = get_git_metadata(REPO_ROOT)
+    env_info = get_environment_info(device)
+    base_ckpt_sha = compute_sha256(base_checkpoint)
+
+    print("=" * 90)
+    print("      EMERGENCY VISION AI — SECOND-STAGE PERSON-CROP ACTION TRAINING")
+    print("=" * 90)
+    print(f"Accelerator Device:        {device.upper()} ({env_info['gpu_info']})")
+    print(f"Git Commit SHA:            {git_info['commit_sha']} (Branch: {git_info['branch']})")
+    print(f"Base Checkpoint:           {base_checkpoint} (Exists: {os.path.exists(base_checkpoint)})")
+    print(f"Base Checkpoint SHA-256:   {base_ckpt_sha}")
+    print(f"YOLO Detector:             {yolo_model_path}")
+    print(f"Target Checkpoint:         {target_checkpoint}")
+    print(f"Drive Backup Directory:    {drive_backup_dir or 'Disabled'}")
+    print(f"Epochs:                    {epochs} | Batch Size: {batch_size} | LR: {lr}")
+    print(f"Random Seed:               {seed} (Strict Sequence Isolation Enforced)")
+    print("=" * 90)
+
+    # 1. Build and Cache Person-Crop Tube Splits
+    logger.info("Initializing YOLO model wrapper for tube extraction...")
+    yolo_wrapper = YOLOModelWrapper(model_path=yolo_model_path, device=device)
+    yolo_wrapper._ensure_loaded()
+
+    train_ds, val_ds, test_ds = build_person_crop_splits(
+        dataset_root=dataset_root,
+        yolo_wrapper=yolo_wrapper,
+        cache_dir=cache_dir,
+        stride=4,
+        seed=seed,
+        force_rebuild=force_rebuild,
+    )
+
+    train_fall = sum(1 for s in train_ds.samples if s.label == LABEL_FALL)
+    train_norm = sum(1 for s in train_ds.samples if s.label == LABEL_NORMAL)
+    val_fall = sum(1 for s in val_ds.samples if s.label == LABEL_FALL)
+    val_norm = sum(1 for s in val_ds.samples if s.label == LABEL_NORMAL)
+    test_fall = sum(1 for s in test_ds.samples if s.label == LABEL_FALL)
+    test_norm = sum(1 for s in test_ds.samples if s.label == LABEL_NORMAL)
+
+    print("\nExtracted Production-Aligned 16-Frame Person Tubes:")
+    print(f"  • Train Split: {len(train_ds):4d} tubes (FALL: {train_fall:3d}, NORMAL: {train_norm:3d})")
+    print(f"  • Val Split:   {len(val_ds):4d} tubes (FALL: {val_fall:3d}, NORMAL: {val_norm:3d})")
+    print(f"  • Test Split:  {len(test_ds):4d} tubes (FALL: {test_fall:3d}, NORMAL: {test_norm:3d})")
+    print("-" * 90)
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=False)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
+
+    # 2. Build Model & Differential Fine-Tuning Strategy
+    model = load_model_from_checkpoint(base_checkpoint, num_classes=2, device=device)
+
+    # Unfreeze layer3, layer4, and fc head
+    for p in model.parameters():
+        p.requires_grad = False
+    for p in model.layer3.parameters():
+        p.requires_grad = True
+    for p in model.layer4.parameters():
+        p.requires_grad = True
+    for p in model.fc.parameters():
+        p.requires_grad = True
+
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": model.layer3.parameters(), "lr": lr * 0.2},
+            {"params": model.layer4.parameters(), "lr": lr * 0.5},
+            {"params": model.fc.parameters(), "lr": lr},
+        ],
+        weight_decay=weight_decay,
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    criterion = nn.CrossEntropyLoss()
+
+    # 3. Training Loop
+    best_val_f1 = -1.0
+    best_val_metrics: Dict[str, Any] = {}
+    history = []
+    start_time = time.time()
+
+    print("\nStarting second-stage person-crop fine-tuning...")
+    print("-" * 95)
+    print(f"{'Epoch':<6} | {'Train Loss':<12} | {'Val Loss':<10} | {'Val Acc':<10} | {'Fall Prec':<10} | {'Fall Rec':<10} | {'Fall F1':<10}")
+    print("-" * 95)
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        train_loss = 0.0
+        n_samples = 0
+
+        for videos, labels in train_loader:
+            videos = videos.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(videos)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item() * labels.size(0)
+            n_samples += labels.size(0)
+
+        scheduler.step()
+        avg_train_loss = train_loss / n_samples if n_samples > 0 else 0.0
+        val_loss, val_metrics = evaluate_split(model, val_loader, criterion, device=device)
+
+        history.append({
+            "epoch": epoch,
+            "train_loss": avg_train_loss,
+            "val_loss": val_loss,
+            "val_metrics": {
+                k: float(v) if not isinstance(v, np.ndarray) else v.tolist()
+                for k, v in val_metrics.items()
+            },
+        })
+
+        print(
+            f"{epoch:<6} | {avg_train_loss:<12.4f} | {val_loss:<10.4f} | "
+            f"{val_metrics['accuracy'] * 100:<9.2f}% | "
+            f"{val_metrics['fall_precision'] * 100:<9.2f}% | "
+            f"{val_metrics['fall_recall'] * 100:<9.2f}% | "
+            f"{val_metrics['fall_f1'] * 100:<9.2f}%"
+        )
+
+        if val_metrics["fall_f1"] >= best_val_f1:
+            best_val_f1 = val_metrics["fall_f1"]
+            best_val_metrics = val_metrics
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "val_metrics": {
+                        k: float(v) if not isinstance(v, np.ndarray) else v.tolist()
+                        for k, v in val_metrics.items()
+                    },
+                    "arch": "r3d_18",
+                    "domain": "per_person_crops",
+                    "training_timestamp": datetime.now(timezone.utc).isoformat(),
+                    "base_checkpoint_sha256": base_ckpt_sha,
+                    "git_commit_sha": git_info["commit_sha"],
+                },
+                target_checkpoint,
+            )
+
+    training_duration_s = time.time() - start_time
+    print("-" * 95)
+    print(f"Training completed in {training_duration_s:.1f}s. Best checkpoint saved to: {target_checkpoint}")
+
+    # 4. Final Evaluation on Held-Out Test Split
+    print("\n" + "=" * 90)
+    print("      EVALUATING BEST CHECKPOINT ON HELD-OUT TEST SPLIT (Seed=42)")
+    print("=" * 90)
+
+    best_ckpt = torch.load(target_checkpoint, map_location=device, weights_only=False)
+    model.load_state_dict(best_ckpt["model_state_dict"])
+    test_loss, test_metrics = evaluate_split(model, test_loader, criterion, device=device)
+
+    print(f"Test Loss:                   {test_loss:.4f}")
+    print(f"Test Accuracy:               {test_metrics['accuracy'] * 100:.2f}%")
+    print(f"FALL Precision:              {test_metrics['fall_precision'] * 100:.2f}%")
+    print(f"FALL Recall (Sensitivity):   {test_metrics['fall_recall'] * 100:.2f}%")
+    print(f"FALL F1-Score:               {test_metrics['fall_f1']:.4f}")
+    print(f"NORMAL False Positive Rate:  {test_metrics['normal_fpr'] * 100:.2f}%")
+    print(f"Macro F1-Score:              {test_metrics['macro_f1']:.4f}")
+    print("\nTest Confusion Matrix:")
+    cm = test_metrics["confusion_matrix"]
+    print("+" + "-" * 22 + "+" + "-" * 16 + "+" + "-" * 16 + "+")
+    print(f"| {'Actual \\ Predicted':<20} | {'Pred NORMAL':<14} | {'Pred FALL':<14} |")
+    print("+" + "-" * 22 + "+" + "-" * 16 + "+" + "-" * 16 + "+")
+    print(f"| {'Actual NORMAL':<20} | {cm[0, 0]:<14} | {cm[0, 1]:<14} |")
+    print(f"| {'Actual FALL':<20} | {cm[1, 0]:<14} | {cm[1, 1]:<14} |")
+    print("+" + "-" * 22 + "+" + "-" * 16 + "+" + "-" * 16 + "+")
+
+    target_sha256 = compute_sha256(target_checkpoint)
+
+    # 5. Build Metadata Payload
+    metadata_payload = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "training_duration_seconds": round(training_duration_s, 2),
+        "git": git_info,
+        "environment": env_info,
+        "base_checkpoint": {
+            "path": base_checkpoint,
+            "sha256": base_ckpt_sha,
+        },
+        "target_checkpoint": {
+            "path": target_checkpoint,
+            "filename": checkpoint_name,
+            "sha256": target_sha256,
+            "size_bytes": os.path.getsize(target_checkpoint) if os.path.exists(target_checkpoint) else 0,
+        },
+        "dataset": {
+            "root": dataset_root,
+            "train_tubes": len(train_ds),
+            "val_tubes": len(val_ds),
+            "test_tubes": len(test_ds),
+            "train_fall": train_fall,
+            "train_normal": train_norm,
+        },
+        "hyperparameters": {
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "lr": lr,
+            "weight_decay": weight_decay,
+            "seed": seed,
+            "architecture": "r3d_18",
+            "fine_tuning_layers": ["layer3", "layer4", "fc"],
+        },
+        "best_val_metrics": {
+            k: float(v) if not isinstance(v, np.ndarray) else v.tolist()
+            for k, v in best_val_metrics.items()
+        },
+        "test_metrics": {
+            k: float(v) if not isinstance(v, np.ndarray) else v.tolist()
+            for k, v in test_metrics.items()
+        },
+        "training_history": history,
+    }
+
+    # Write local metadata and results JSON
+    with open(target_metadata_path, "w") as mf:
+        json.dump(metadata_payload, mf, indent=2)
+    logger.info("Saved model metadata JSON to: %s", target_metadata_path)
+
+    with open(results_json_path, "w") as rf:
+        json.dump(metadata_payload, rf, indent=2)
+    logger.info("Saved training results JSON to: %s", results_json_path)
+
+    # 6. Automatic Google Drive Backup
+    if drive_backup_dir:
+        try:
+            os.makedirs(drive_backup_dir, exist_ok=True)
+            drive_ckpt_path = os.path.join(drive_backup_dir, checkpoint_name)
+            drive_meta_path = os.path.join(drive_backup_dir, checkpoint_name.replace(".pth", "_metadata.json"))
+
+            shutil.copy2(target_checkpoint, drive_ckpt_path)
+            shutil.copy2(target_metadata_path, drive_meta_path)
+            logger.info("Backed up checkpoint to Google Drive: %s", drive_ckpt_path)
+            logger.info("Backed up metadata to Google Drive: %s", drive_meta_path)
+
+            # Also backup to Drive results/training/ if possible
+            drive_project_root = os.path.dirname(os.path.dirname(drive_backup_dir))
+            drive_results_dir = os.path.join(drive_project_root, "results", "training")
+            if os.path.exists(drive_project_root):
+                os.makedirs(drive_results_dir, exist_ok=True)
+                shutil.copy2(results_json_path, os.path.join(drive_results_dir, "train_person_crops_results.json"))
+                logger.info("Backed up results JSON to Google Drive: %s", drive_results_dir)
+        except Exception as err:
+            logger.warning("Failed to complete Google Drive backup: %s", err)
+
+    return metadata_payload
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Emergency Vision AI Person-Crop Training Orchestrator")
+    parser.add_argument("--dataset-root", type=str, default="data/urfd", help="Path to URFD dataset")
+    parser.add_argument("--base-checkpoint", type=str, default="models/action_recognition/r3d18_urfd_best.pth", help="Path to base weights")
+    parser.add_argument("--yolo-model", type=str, default="models/detection/yolo11n.pt", help="Path to YOLO weights")
+    parser.add_argument("--output-dir", type=str, default="models/action_recognition", help="Output checkpoint directory")
+    parser.add_argument("--checkpoint-name", type=str, default="r3d18_urfd_person_crops.pth", help="Checkpoint filename")
+    parser.add_argument("--results-dir", type=str, default="results/training", help="Results directory for reports")
+    parser.add_argument("--drive-backup-dir", type=str, default=None, help="Persistent Google Drive backup directory")
+    parser.add_argument("--epochs", type=int, default=12, help="Number of training epochs")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--device", type=str, default="cuda", help="Compute device (cuda, mps, cpu)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for strict sequence isolation")
+    parser.add_argument("--cache-dir", type=str, default=".cache/person_crops", help="Cache directory for tube datasets")
+    parser.add_argument("--force-rebuild", action="store_true", help="Force rebuilding tube cache")
+
+    args = parser.parse_args()
+
+    train_person_crop_pipeline(
+        dataset_root=args.dataset_root,
+        base_checkpoint=args.base_checkpoint,
+        yolo_model_path=args.yolo_model,
+        output_dir=args.output_dir,
+        checkpoint_name=args.checkpoint_name,
+        results_dir=args.results_dir,
+        drive_backup_dir=args.drive_backup_dir,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        device_str=args.device,
+        seed=args.seed,
+        cache_dir=args.cache_dir,
+        force_rebuild=args.force_rebuild,
+    )
+
+
+if __name__ == "__main__":
+    main()

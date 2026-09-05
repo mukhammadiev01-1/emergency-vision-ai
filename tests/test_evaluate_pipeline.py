@@ -11,6 +11,7 @@ from scripts.evaluate_production_pipeline import (
     collect_dataset_videos,
     evaluate_single_video,
     run_pipeline_evaluation,
+    compare_pipeline_models,
     resolve_device,
 )
 from apps.worker.app.models.yolo import YOLOModelWrapper
@@ -73,3 +74,25 @@ class TestEvaluateProductionPipeline(unittest.TestCase):
         self.assertIn("confusion_matrix", summary["metrics"])
         self.assertEqual(summary["metrics"]["total_videos"], 2)
         self.assertTrue(os.path.exists(json_out))
+
+    def test_compare_pipeline_models_synthetic(self):
+        """Verify compare_pipeline_models runs both models and builds comparison delta."""
+        json_out = os.path.join(self.temp_dir, "comparison_report.json")
+        res = compare_pipeline_models(
+            model_a_path="models/action_recognition/r3d18_urfd_best.pth",
+            model_b_path="models/action_recognition/r3d18_urfd_best.pth",
+            dataset_root=self.dataset_dir,
+            yolo_model_path="models/detection/yolo11n.pt",
+            device_str="cpu",
+            conf_threshold=0.70,
+            consecutive_required=2,
+            max_fall_videos=1,
+            max_normal_videos=1,
+            output_json_path=json_out,
+        )
+
+        self.assertIn("model_a", res)
+        self.assertIn("model_b", res)
+        self.assertIn("comparison_delta", res)
+        self.assertTrue(os.path.exists(json_out))
+
