@@ -31,6 +31,9 @@ logger = logging.getLogger("colab_bootstrap")
 
 CANONICAL_ACTION_CHECKPOINT = "models/action_recognition/r3d18_urfd_best.pth"
 CANONICAL_YOLO_CHECKPOINT = "models/detection/yolo11n.pt"
+EXPERIMENT_ACTION_CHECKPOINT = "models/action_recognition/r3d18_urfd_person_crops.pth"
+EXPERIMENT_METADATA_JSON = "models/action_recognition/r3d18_urfd_person_crops_metadata.json"
+MIN_PLAUSIBLE_CHECKPOINT_SIZE = 1024 * 1024  # 1 MB threshold for valid weights
 EXPECTED_FALL_COUNT = 30
 EXPECTED_NORMAL_COUNT = 40
 EXPECTED_TOTAL_COUNT = 70
@@ -358,6 +361,268 @@ def verify_canonical_checkpoints(
     }
 
 
+def find_expected_experiment_metadata(
+    repo_dir: str,
+    drive_root: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+    """Locate experiment metadata JSON and return (expected_sha256, expected_size_bytes, source_path).
+
+    Searches both persistent Google Drive storage and the local workspace repository.
+    """
+    candidates = []
+    if drive_root and os.path.exists(drive_root):
+        candidates.extend([
+            os.path.join(drive_root, EXPERIMENT_METADATA_JSON),
+            os.path.join(
+                drive_root,
+                "experiments",
+                "2026-09-05_r3d18_urfd_person_crops",
+                "r3d18_urfd_person_crops_metadata.json",
+            ),
+            os.path.join(
+                drive_root,
+                "experiments",
+                "2026-09-05_r3d18_urfd_person_crops",
+                "experiment_manifest.json",
+            ),
+        ])
+    candidates.extend([
+        os.path.join(repo_dir, EXPERIMENT_METADATA_JSON),
+        os.path.join(
+            repo_dir,
+            "experiments",
+            "2026-09-05_r3d18_urfd_person_crops",
+            "r3d18_urfd_person_crops_metadata.json",
+        ),
+        os.path.join(
+            repo_dir,
+            "experiments",
+            "2026-09-05_r3d18_urfd_person_crops",
+            "experiment_manifest.json",
+        ),
+    ])
+
+    for cand in candidates:
+        if os.path.exists(cand) and os.path.getsize(cand) > 0:
+            try:
+                with open(cand, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                target = data.get("target_checkpoint") or data.get("checkpoint") or {}
+                expected_sha = target.get("sha256") or data.get("sha256")
+                expected_size = target.get("size_bytes") or data.get("size_bytes")
+                if expected_sha or expected_size:
+                    return expected_sha, expected_size, cand
+            except Exception as err:
+                logger.debug("Could not parse experiment metadata from %s: %s", cand, err)
+
+    return None, None, None
+
+
+def restore_experiment_artifacts(
+    repo_dir: str,
+    drive_root: Optional[str] = None,
+    min_size_bytes: int = MIN_PLAUSIBLE_CHECKPOINT_SIZE,
+    verify_only: bool = False,
+) -> Dict[str, Any]:
+    """Restore and validate persistent experiment artifacts (trained person-crop model) from Google Drive.
+
+    Architecture rules:
+    - Drive is the authoritative persistent store for large trained experiment artifacts.
+    - If a valid local checkpoint already exists, it is NOT overwritten unnecessarily (idempotent).
+    - If Drive contains the checkpoint, validate its size and SHA-256 (if metadata exists) before copying.
+    - Reject invalid or suspiciously small (< min_size_bytes) files with ValueError.
+    - If the checkpoint is absent from Drive and local workspace, report a clear warning without failing or downloading.
+    """
+    local_ckpt_path = os.path.join(repo_dir, EXPERIMENT_ACTION_CHECKPOINT)
+    local_meta_path = os.path.join(repo_dir, EXPERIMENT_METADATA_JSON)
+    os.makedirs(os.path.dirname(local_ckpt_path), exist_ok=True)
+
+    drive_ckpt_path = os.path.join(drive_root, EXPERIMENT_ACTION_CHECKPOINT) if drive_root else None
+    drive_meta_path = os.path.join(drive_root, EXPERIMENT_METADATA_JSON) if drive_root else None
+
+    # Step 1: Discover expected metadata (SHA-256, size)
+    expected_sha, expected_size, meta_source = find_expected_experiment_metadata(repo_dir, drive_root)
+
+    # Step 2: Restore metadata JSON if present in Drive but missing locally
+    metadata_restored = False
+    if not verify_only and drive_meta_path and os.path.exists(drive_meta_path):
+        if not os.path.exists(local_meta_path):
+            try:
+                os.makedirs(os.path.dirname(local_meta_path), exist_ok=True)
+                shutil.copy2(drive_meta_path, local_meta_path)
+                metadata_restored = True
+                logger.info("Restored experiment metadata JSON: %s -> %s", drive_meta_path, local_meta_path)
+            except Exception as err:
+                logger.warning("Failed copying experiment metadata from Drive: %s", err)
+
+    # Step 3: Check if local checkpoint already exists and is valid
+    local_is_valid = False
+    if os.path.exists(local_ckpt_path):
+        local_size = os.path.getsize(local_ckpt_path)
+        if local_size >= min_size_bytes:
+            if expected_sha:
+                local_sha = compute_sha256(local_ckpt_path)
+                if local_sha.lower() == expected_sha.lower():
+                    local_is_valid = True
+                else:
+                    logger.warning(
+                        "Local experiment checkpoint %s hash mismatch! Expected %s, found %s.",
+                        local_ckpt_path,
+                        expected_sha,
+                        local_sha,
+                    )
+            else:
+                # No expected metadata hash to dispute local validity; plausible size is sufficient
+                local_is_valid = True
+
+        if local_is_valid:
+            local_sha = compute_sha256(local_ckpt_path)
+            logger.info(
+                "Valid local experiment checkpoint already exists (%0.2f MB). Skipping Drive restoration (idempotent).",
+                local_size / (1024 * 1024),
+            )
+            return {
+                "person_crops_checkpoint": {
+                    "path": local_ckpt_path,
+                    "drive_source": drive_ckpt_path if (drive_ckpt_path and os.path.exists(drive_ckpt_path)) else None,
+                    "status": "already_present_local",
+                    "restored_from_drive": False,
+                    "size_mb": round(local_size / (1024 * 1024), 2),
+                    "size_bytes": local_size,
+                    "sha256": local_sha,
+                    "expected_sha256": expected_sha,
+                    "valid": True,
+                },
+                "metadata": {
+                    "path": local_meta_path if os.path.exists(local_meta_path) else meta_source,
+                    "source": meta_source,
+                    "restored": metadata_restored,
+                },
+            }
+
+    # Step 4: Check Google Drive for persistent experiment checkpoint
+    if not drive_ckpt_path or not os.path.exists(drive_ckpt_path):
+        if os.path.exists(local_ckpt_path):
+            logger.warning(
+                "Local experiment checkpoint at %s is invalid/suspicious and Drive backup is not available.",
+                local_ckpt_path,
+            )
+            return {
+                "person_crops_checkpoint": {
+                    "path": local_ckpt_path,
+                    "drive_source": None,
+                    "status": "invalid_local",
+                    "restored_from_drive": False,
+                    "size_mb": round(os.path.getsize(local_ckpt_path) / (1024 * 1024), 2),
+                    "size_bytes": os.path.getsize(local_ckpt_path),
+                    "sha256": compute_sha256(local_ckpt_path),
+                    "expected_sha256": expected_sha,
+                    "valid": False,
+                },
+                "metadata": {
+                    "path": local_meta_path if os.path.exists(local_meta_path) else meta_source,
+                    "source": meta_source,
+                    "restored": metadata_restored,
+                },
+            }
+
+        logger.warning(
+            "Persistent experiment checkpoint '%s' not found in Drive at: %s. "
+            "The environment will operate with base canonical models until training is executed.",
+            EXPERIMENT_ACTION_CHECKPOINT,
+            drive_ckpt_path if drive_root else "N/A (Google Drive not mounted or not provided)",
+        )
+        return {
+            "person_crops_checkpoint": {
+                "path": local_ckpt_path,
+                "drive_source": drive_ckpt_path,
+                "status": "not_found",
+                "restored_from_drive": False,
+                "size_mb": 0.0,
+                "size_bytes": 0,
+                "sha256": "N/A",
+                "expected_sha256": expected_sha,
+                "valid": False,
+            },
+            "metadata": {
+                "path": local_meta_path if os.path.exists(local_meta_path) else meta_source,
+                "source": meta_source,
+                "restored": metadata_restored,
+            },
+        }
+
+    # Step 5: Validate Drive checkpoint before copying
+    drive_size = os.path.getsize(drive_ckpt_path)
+    if drive_size < min_size_bytes:
+        raise ValueError(
+            f"Drive experiment checkpoint {drive_ckpt_path} is invalid or corrupted! "
+            f"Size is {drive_size} bytes (minimum plausible size: {min_size_bytes} bytes / 1 MB)."
+        )
+
+    drive_sha = compute_sha256(drive_ckpt_path)
+    if expected_sha and drive_sha.lower() != expected_sha.lower():
+        raise ValueError(
+            f"Drive experiment checkpoint {drive_ckpt_path} failed checksum validation! "
+            f"Expected SHA-256: {expected_sha}, computed: {drive_sha}."
+        )
+
+    # Step 6: Restore checkpoint from Drive
+    if verify_only:
+        logger.info(
+            "Verify-only mode: valid checkpoint found in Drive at %s (%0.2f MB).",
+            drive_ckpt_path,
+            drive_size / (1024 * 1024),
+        )
+        return {
+            "person_crops_checkpoint": {
+                "path": local_ckpt_path,
+                "drive_source": drive_ckpt_path,
+                "status": "verified_in_drive",
+                "restored_from_drive": False,
+                "size_mb": round(drive_size / (1024 * 1024), 2),
+                "size_bytes": drive_size,
+                "sha256": drive_sha,
+                "expected_sha256": expected_sha,
+                "valid": True,
+            },
+            "metadata": {
+                "path": local_meta_path if os.path.exists(local_meta_path) else meta_source,
+                "source": meta_source,
+                "restored": metadata_restored,
+            },
+        }
+
+    logger.info(
+        "Restoring persistent experiment checkpoint from Drive: %s -> %s (%0.2f MB)...",
+        drive_ckpt_path,
+        local_ckpt_path,
+        drive_size / (1024 * 1024),
+    )
+    shutil.copy2(drive_ckpt_path, local_ckpt_path)
+
+    restored_size = os.path.getsize(local_ckpt_path)
+    restored_sha = compute_sha256(local_ckpt_path)
+
+    return {
+        "person_crops_checkpoint": {
+            "path": local_ckpt_path,
+            "drive_source": drive_ckpt_path,
+            "status": "restored_from_drive",
+            "restored_from_drive": True,
+            "size_mb": round(restored_size / (1024 * 1024), 2),
+            "size_bytes": restored_size,
+            "sha256": restored_sha,
+            "expected_sha256": expected_sha,
+            "valid": True,
+        },
+        "metadata": {
+            "path": local_meta_path if os.path.exists(local_meta_path) else meta_source,
+            "source": meta_source,
+            "restored": metadata_restored,
+        },
+    }
+
+
 def setup_directories(
     repo_dir: str,
     drive_root: Optional[str] = None,
@@ -427,13 +692,30 @@ def print_environment_report(status: Dict[str, Any]) -> None:
     print(f"  • Total Sequences:   {ds.get('total_count', 0)} / {EXPECTED_TOTAL_COUNT}")
     print(f"  • Dataset Intact:    {ds.get('intact', False)}")
     print("-" * 80)
-    print("CANONICAL MODEL ARTIFACTS:")
-    act = models.get("action_checkpoint", {})
-    yolo = models.get("yolo_checkpoint", {})
-    print(f"  • Action (R3D-18):   {act.get('path', 'N/A')} ({act.get('size_mb', 0)} MB)")
-    print(f"    SHA-256:           {act.get('sha256', 'N/A')}")
-    print(f"  • Detection (YOLO):  {yolo.get('path', 'N/A')} ({yolo.get('size_mb', 0)} MB)")
-    print(f"    SHA-256:           {yolo.get('sha256', 'N/A')}")
+    print("CANONICAL REPOSITORY MODEL ARTIFACTS:")
+    canonical = models.get("canonical", {})
+    act = canonical.get("action_checkpoint") or models.get("action_checkpoint", {})
+    yolo = canonical.get("yolo_checkpoint") or models.get("yolo_checkpoint", {})
+    print(f"  • Base Action (R3D-18): {act.get('path', 'N/A')} ({act.get('size_mb', 0)} MB)")
+    print(f"    SHA-256:              {act.get('sha256', 'N/A')}")
+    print(f"    Status:               {'Valid' if act.get('valid') else 'Invalid/Missing'}")
+    print(f"  • Detection (YOLO):     {yolo.get('path', 'N/A')} ({yolo.get('size_mb', 0)} MB)")
+    print(f"    SHA-256:              {yolo.get('sha256', 'N/A')}")
+    print(f"    Status:               {'Valid' if yolo.get('valid') else 'Invalid/Missing'}")
+    print("-" * 80)
+    print("PERSISTENT EXPERIMENT ARTIFACTS (GOOGLE DRIVE):")
+    experiment = models.get("experiment", {})
+    exp_ckpt = experiment.get("person_crops_checkpoint") or models.get("experiment_checkpoint", {})
+    exp_meta = experiment.get("metadata", {})
+    print(f"  • Person-Crop Action:   {exp_ckpt.get('path', 'N/A')} ({exp_ckpt.get('size_mb', 0)} MB)")
+    print(f"    Status:               {exp_ckpt.get('status', 'N/A')} (Valid: {exp_ckpt.get('valid', False)})")
+    if exp_ckpt.get("drive_source"):
+        print(f"    Drive Source:         {exp_ckpt.get('drive_source')}")
+    print(f"    SHA-256:              {exp_ckpt.get('sha256', 'N/A')}")
+    if exp_ckpt.get("expected_sha256"):
+        print(f"    Expected SHA-256:     {exp_ckpt.get('expected_sha256')}")
+    if exp_meta.get("path"):
+        print(f"  • Model Metadata JSON:  {exp_meta.get('path')} (Source: {exp_meta.get('source', 'N/A')})")
     print("=" * 80)
     print("STATUS: ENVIRONMENT FULLY INITIALIZED AND READY FOR TRAINING / BENCHMARK\n")
 
@@ -470,6 +752,13 @@ def run_bootstrap(
             logger.warning("Drive root %s not found. Proceeding with local dataset check.", drive_root)
     elif not in_colab and not skip_drive and os.path.exists(drive_root):
         ds_status = verify_drive_dataset(drive_root)
+
+    # Determine active Drive root if accessible
+    active_drive_root: Optional[str] = None
+    if in_colab and drive_mounted and os.path.exists(drive_root):
+        active_drive_root = drive_root
+    elif not in_colab and not skip_drive and os.path.exists(drive_root):
+        active_drive_root = drive_root
 
     # Fallback to local repo dir if outside Colab
     resolved_repo_dir = repo_dir
@@ -519,12 +808,25 @@ def run_bootstrap(
                 "intact": (n_f == EXPECTED_FALL_COUNT and n_n == EXPECTED_NORMAL_COUNT),
             }
 
-    # 7. Verify Checkpoints
-    models_status = verify_canonical_checkpoints(resolved_repo_dir, drive_root if drive_mounted else None)
+    # 7. Verify Checkpoints & Restore Experiment Artifacts
+    canonical_models = verify_canonical_checkpoints(resolved_repo_dir, active_drive_root)
+    experiment_models = restore_experiment_artifacts(
+        resolved_repo_dir,
+        active_drive_root,
+        verify_only=verify_only,
+    )
+
+    models_status = {
+        "canonical": canonical_models,
+        "experiment": experiment_models,
+        "action_checkpoint": canonical_models["action_checkpoint"],
+        "yolo_checkpoint": canonical_models["yolo_checkpoint"],
+        "experiment_checkpoint": experiment_models.get("person_crops_checkpoint", {}),
+    }
 
     # 8. Setup Output Directories
     dir_permissions = setup_directories(
-        resolved_repo_dir, drive_root if drive_mounted else None
+        resolved_repo_dir, active_drive_root
     )
 
     report = {

@@ -14,6 +14,13 @@ from scripts.colab_bootstrap import (
     verify_canonical_checkpoints,
     setup_directories,
     run_bootstrap,
+    find_expected_experiment_metadata,
+    restore_experiment_artifacts,
+    CANONICAL_ACTION_CHECKPOINT,
+    CANONICAL_YOLO_CHECKPOINT,
+    EXPERIMENT_ACTION_CHECKPOINT,
+    EXPERIMENT_METADATA_JSON,
+    MIN_PLAUSIBLE_CHECKPOINT_SIZE,
     EXPECTED_FALL_COUNT,
     EXPECTED_NORMAL_COUNT,
 )
@@ -143,3 +150,195 @@ class TestColabBootstrap(unittest.TestCase):
         self.assertIn("cuda", report)
         self.assertIn("models", report)
         self.assertIn("versions", report)
+
+    def test_restore_experiment_checkpoint_from_drive(self):
+        """Verify persistent person-crop checkpoint is restored from Drive to local repository."""
+        local_repo = os.path.join(self.test_dir, "repo")
+        os.makedirs(local_repo, exist_ok=True)
+
+        drive_ckpt = os.path.join(self.drive_root, EXPERIMENT_ACTION_CHECKPOINT)
+        os.makedirs(os.path.dirname(drive_ckpt), exist_ok=True)
+        dummy_content = b"trained_person_crop_weights" * 50000  # ~1.35 MB
+        with open(drive_ckpt, "wb") as f:
+            f.write(dummy_content)
+
+        res = restore_experiment_artifacts(local_repo, self.drive_root)
+        ckpt_info = res["person_crops_checkpoint"]
+
+        self.assertEqual(ckpt_info["status"], "restored_from_drive")
+        self.assertTrue(ckpt_info["restored_from_drive"])
+        self.assertTrue(ckpt_info["valid"])
+        self.assertEqual(ckpt_info["size_bytes"], len(dummy_content))
+
+        local_ckpt = os.path.join(local_repo, EXPERIMENT_ACTION_CHECKPOINT)
+        self.assertTrue(os.path.exists(local_ckpt))
+        with open(local_ckpt, "rb") as f:
+            self.assertEqual(f.read(), dummy_content)
+
+    def test_already_existing_valid_checkpoint_not_overwritten(self):
+        """Verify an already-existing valid local checkpoint is NOT overwritten (idempotency)."""
+        local_repo = os.path.join(self.test_dir, "repo")
+        local_ckpt = os.path.join(local_repo, EXPERIMENT_ACTION_CHECKPOINT)
+        os.makedirs(os.path.dirname(local_ckpt), exist_ok=True)
+
+        local_content = b"local_valid_weights" * 60000  # ~1.14 MB
+        with open(local_ckpt, "wb") as f:
+            f.write(local_content)
+        initial_mtime = os.path.getmtime(local_ckpt)
+
+        # Drive has different content
+        drive_ckpt = os.path.join(self.drive_root, EXPERIMENT_ACTION_CHECKPOINT)
+        os.makedirs(os.path.dirname(drive_ckpt), exist_ok=True)
+        with open(drive_ckpt, "wb") as f:
+            f.write(b"drive_weights" * 100000)
+
+        res = restore_experiment_artifacts(local_repo, self.drive_root)
+        ckpt_info = res["person_crops_checkpoint"]
+
+        self.assertEqual(ckpt_info["status"], "already_present_local")
+        self.assertFalse(ckpt_info["restored_from_drive"])
+        self.assertTrue(ckpt_info["valid"])
+        self.assertEqual(os.path.getmtime(local_ckpt), initial_mtime)
+        with open(local_ckpt, "rb") as f:
+            self.assertEqual(f.read(), local_content)
+
+    def test_missing_drive_checkpoint_produces_clear_state(self):
+        """Verify missing Drive experiment checkpoint produces a clear state without error or internet download."""
+        local_repo = os.path.join(self.test_dir, "repo")
+        os.makedirs(local_repo, exist_ok=True)
+
+        res = restore_experiment_artifacts(local_repo, self.drive_root)
+        ckpt_info = res["person_crops_checkpoint"]
+
+        self.assertEqual(ckpt_info["status"], "not_found")
+        self.assertFalse(ckpt_info["valid"])
+        self.assertFalse(ckpt_info["restored_from_drive"])
+        self.assertEqual(ckpt_info["size_mb"], 0.0)
+
+    def test_invalid_too_small_checkpoint_rejected(self):
+        """Verify invalid or suspiciously small (< 1 MB) Drive checkpoint is rejected with ValueError."""
+        local_repo = os.path.join(self.test_dir, "repo")
+        os.makedirs(local_repo, exist_ok=True)
+
+        drive_ckpt = os.path.join(self.drive_root, EXPERIMENT_ACTION_CHECKPOINT)
+        os.makedirs(os.path.dirname(drive_ckpt), exist_ok=True)
+        # Create invalid 256-byte stub file
+        with open(drive_ckpt, "wb") as f:
+            f.write(b"corrupted_stub" * 10)
+
+        with self.assertRaises(ValueError) as ctx:
+            restore_experiment_artifacts(local_repo, self.drive_root)
+        self.assertIn("invalid or corrupted", str(ctx.exception))
+
+    def test_idempotent_repeated_bootstrap(self):
+        """Verify running restore_experiment_artifacts repeatedly is safe, idempotent, and consistent."""
+        local_repo = os.path.join(self.test_dir, "repo")
+        os.makedirs(local_repo, exist_ok=True)
+
+        drive_ckpt = os.path.join(self.drive_root, EXPERIMENT_ACTION_CHECKPOINT)
+        os.makedirs(os.path.dirname(drive_ckpt), exist_ok=True)
+        with open(drive_ckpt, "wb") as f:
+            f.write(b"repeat_test_weights" * 60000)
+
+        # 1st execution: restores from Drive
+        res1 = restore_experiment_artifacts(local_repo, self.drive_root)
+        self.assertEqual(res1["person_crops_checkpoint"]["status"], "restored_from_drive")
+        self.assertTrue(res1["person_crops_checkpoint"]["restored_from_drive"])
+
+        # 2nd execution: recognizes already present valid checkpoint
+        res2 = restore_experiment_artifacts(local_repo, self.drive_root)
+        self.assertEqual(res2["person_crops_checkpoint"]["status"], "already_present_local")
+        self.assertFalse(res2["person_crops_checkpoint"]["restored_from_drive"])
+        self.assertEqual(res1["person_crops_checkpoint"]["sha256"], res2["person_crops_checkpoint"]["sha256"])
+
+    def test_checksum_validation_with_metadata(self):
+        """Verify SHA-256 checksum validation passes on valid hash and raises ValueError on mismatch."""
+        local_repo = os.path.join(self.test_dir, "repo")
+        os.makedirs(local_repo, exist_ok=True)
+
+        drive_ckpt = os.path.join(self.drive_root, EXPERIMENT_ACTION_CHECKPOINT)
+        os.makedirs(os.path.dirname(drive_ckpt), exist_ok=True)
+        content = b"checksum_verified_weights" * 50000
+        with open(drive_ckpt, "wb") as f:
+            f.write(content)
+        expected_sha = compute_sha256(drive_ckpt)
+
+        # Write matching metadata JSON in Drive
+        drive_meta = os.path.join(self.drive_root, EXPERIMENT_METADATA_JSON)
+        import json
+        with open(drive_meta, "w") as f:
+            json.dump({
+                "target_checkpoint": {
+                    "path": EXPERIMENT_ACTION_CHECKPOINT,
+                    "sha256": expected_sha,
+                    "size_bytes": len(content),
+                }
+            }, f)
+
+        # Case A: Valid checksum match
+        res = restore_experiment_artifacts(local_repo, self.drive_root)
+        self.assertEqual(res["person_crops_checkpoint"]["sha256"], expected_sha)
+        self.assertEqual(res["person_crops_checkpoint"]["expected_sha256"], expected_sha)
+        self.assertTrue(res["person_crops_checkpoint"]["valid"])
+        self.assertTrue(res["metadata"]["restored"])
+
+        # Case B: Tampered / mismatched checksum in metadata
+        with open(drive_meta, "w") as f:
+            json.dump({
+                "target_checkpoint": {
+                    "path": EXPERIMENT_ACTION_CHECKPOINT,
+                    "sha256": "0" * 64,
+                    "size_bytes": len(content),
+                }
+            }, f)
+
+        # Clear local repo to force Drive re-check
+        local_ckpt = os.path.join(local_repo, EXPERIMENT_ACTION_CHECKPOINT)
+        local_meta = os.path.join(local_repo, EXPERIMENT_METADATA_JSON)
+        if os.path.exists(local_ckpt):
+            os.remove(local_ckpt)
+        if os.path.exists(local_meta):
+            os.remove(local_meta)
+
+        with self.assertRaises(ValueError) as ctx:
+            restore_experiment_artifacts(local_repo, self.drive_root)
+        self.assertIn("failed checksum validation", str(ctx.exception))
+
+    @patch("scripts.colab_bootstrap.is_colab", return_value=False)
+    def test_run_bootstrap_includes_experiment_checkpoint_in_report(self, mock_colab):
+        """Verify run_bootstrap includes both canonical and experiment categories in the report."""
+        local_repo = os.path.join(self.test_dir, "repo_full")
+        os.makedirs(local_repo, exist_ok=True)
+
+        # Setup canonical models in local_repo
+        action_ckpt = os.path.join(local_repo, CANONICAL_ACTION_CHECKPOINT)
+        yolo_ckpt = os.path.join(local_repo, CANONICAL_YOLO_CHECKPOINT)
+        os.makedirs(os.path.dirname(action_ckpt), exist_ok=True)
+        os.makedirs(os.path.dirname(yolo_ckpt), exist_ok=True)
+        with open(action_ckpt, "wb") as f:
+            f.write(b"1" * (1024 * 1024 + 500))
+        with open(yolo_ckpt, "wb") as f:
+            f.write(b"2" * (600 * 1024))
+
+        # Setup experiment checkpoint in Drive
+        drive_exp_ckpt = os.path.join(self.drive_root, EXPERIMENT_ACTION_CHECKPOINT)
+        os.makedirs(os.path.dirname(drive_exp_ckpt), exist_ok=True)
+        with open(drive_exp_ckpt, "wb") as f:
+            f.write(b"3" * (1024 * 1024 + 1000))
+
+        report = run_bootstrap(
+            drive_root=self.drive_root,
+            repo_dir=local_repo,
+            skip_install=True,
+            skip_drive=False,
+            verify_only=False,
+        )
+
+        models = report["models"]
+        self.assertIn("canonical", models)
+        self.assertIn("experiment", models)
+        self.assertIn("action_checkpoint", models["canonical"])
+        self.assertIn("yolo_checkpoint", models["canonical"])
+        self.assertIn("person_crops_checkpoint", models["experiment"])
+        self.assertEqual(models["experiment"]["person_crops_checkpoint"]["status"], "restored_from_drive")
+        self.assertTrue(models["experiment"]["person_crops_checkpoint"]["valid"])
