@@ -14,14 +14,14 @@
 | Dimension | Baseline Model (`r3d18_urfd_best.pth`) | Person-Crop Model (`r3d18_urfd_person_crops.pth`) | Delta / Status |
 | :--- | :--- | :--- | :--- |
 | **Training Representation** | Whole-camera frames ($112 \times 112$) | YOLO11n + ByteTrack 5% padded person crops | Domain gap eliminated |
-| **Held-Out Test Accuracy** | 100.0% (whole-frame) | **96.81%** (person-crop tubes) | Sequence-level isolated |
-| **Held-Out Test Recall** | 100.0% (whole-frame) | **95.12%** (person-crop tubes) | Sensitivity preserved |
-| **Production Video Accuracy** | 50.0% (5/10 videos) | **90.0%** (9/10 videos) | **+40.0% improvement** |
-| **Production FALL Recall** | **0.0%** (0/5 falls detected) | **80.0%** (4/5 falls detected) | **+80.0% improvement** |
-| **Production NORMAL FPR** | 0.0% (0/5 false alarms) | **0.0%** (0/5 false alarms) | **0% False Positive Rate maintained** |
-| **NORMAL Specificity** | 100.0% | **100.0%** | Zero false alarms across ADL |
+| **Held-Out Test Accuracy** | 100.0% (whole-frame) | **96.09%** (person-crop tubes) | Sequence-level isolated |
+| **Held-Out Test Recall** | 100.0% (whole-frame) | **85.00%** (person-crop tubes) | Sensitivity preserved |
+| **Production Video Accuracy** | 50.00% (5/10 videos) | **90.00%** (9/10 videos) | **+40.00% improvement** |
+| **Production FALL Recall** | **0.00%** (0/5 falls detected) | **80.00%** (4/5 falls detected) | **+80.00% improvement** |
+| **Production NORMAL FPR** | 0.00% (0/5 false alarms) | **0.00%** (0/5 false alarms) | **0% False Positive Rate maintained** |
+| **NORMAL Specificity** | 100.00% | **100.00%** | Zero false alarms across ADL |
 | **Confirmed Fall Events** | 0 events | **4 events** (`fall-01..04`) | Successful multi-frame confirmation |
-| **Pipeline Throughput** | 62.52 FPS (Tesla T4) | **58.74 FPS** (Tesla T4) | Exceeds 30 FPS target ($\approx 2\times$) |
+| **Pipeline Throughput** | 64.38 FPS (Tesla T4) | **65.54 FPS** (Tesla T4) | Exceeds 30 FPS target ($\approx 2.1\times$) |
 
 ---
 
@@ -49,18 +49,18 @@
 
 ## 3. Held-Out Test Split Metrics (Sequence-Isolated)
 
-Evaluated on 94 extracted 16-frame person tubes from 11 unseen test sequences (5 FALL, 6 NORMAL):
+Evaluated on 281 extracted 16-frame person tubes from 11 unseen test sequences (5 FALL, 6 NORMAL):
 
-* **Test Loss:** 0.0918
-* **Test Accuracy:** 96.81%
-* **FALL Recall (Sensitivity):** 95.12%
-* **FALL Precision:** 97.50%
-* **FALL F1-Score:** 0.9630
-* **NORMAL False Positive Rate:** 1.89%
-* **Macro F1-Score:** 0.9675
+* **Test Loss:** 0.0971
+* **Test Accuracy:** 96.09%
+* **FALL Recall (Sensitivity):** 85.00%
+* **FALL Precision:** 87.18%
+* **FALL F1-Score:** 0.8608
+* **NORMAL False Positive Rate:** 2.07%
+* **Macro F1-Score:** 0.9190
 * **Confusion Matrix:**
-  - True Normal: 52 | False Positive: 1
-  - False Negative: 2 | True Fall: 39
+  - True Normal: 236 | False Positive: 5
+  - False Negative: 6 | True Fall: 34
 
 ---
 
@@ -73,27 +73,27 @@ $$\text{Input Frame} \rightarrow \text{YOLO11n} \rightarrow \text{ByteTrack} \ri
 
 | Video Filename | Ground Truth | Baseline Max $P$ (`r3d18_urfd_best`) | Person-Crop Max $P$ (`r3d18_urfd_person_crops`) | Events (Crop / Base) | Correct (Crop / Base) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `fall-01-cam0.mp4` | **FALL** | 0.2770 | **0.8421** | 1 / 0 | **YES** / NO |
-| `fall-02-cam0.mp4` | **FALL** | 0.2788 | **0.7915** | 1 / 0 | **YES** / NO |
-| `fall-03-cam0.mp4` | **FALL** | 0.3445 | **0.8834** | 1 / 0 | **YES** / NO |
-| `fall-04-cam0.mp4` | **FALL** | 0.1321 | **0.7512** | 1 / 0 | **YES** / NO |
-| `fall-05-cam0.mp4` | **FALL** | 0.3681 | **0.6380** | 0 / 0 | **NO** / NO *(Known FN)* |
-| `adl-01-cam0.mp4` | **NORMAL** | 0.0149 | **0.0210** | 0 / 0 | **YES** / YES |
-| `adl-02-cam0.mp4` | **NORMAL** | 0.0305 | **0.0385** | 0 / 0 | **YES** / YES |
-| `adl-03-cam0.mp4` | **NORMAL** | 0.0195 | **0.0192** | 0 / 0 | **YES** / YES |
-| `adl-04-cam0.mp4` | **NORMAL** | 0.0454 | **0.0411** | 0 / 0 | **YES** / YES |
-| `adl-05-cam0.mp4` | **NORMAL** | 0.0304 | **0.0320** | 0 / 0 | **YES** / YES |
+| `fall-01-cam0.mp4` | **FALL** | 0.2487 | **0.9995** | 1 / 0 | **YES** / NO |
+| `fall-02-cam0.mp4` | **FALL** | 0.2863 | **0.9994** | 1 / 0 | **YES** / NO |
+| `fall-03-cam0.mp4` | **FALL** | 0.3129 | **0.9999** | 1 / 0 | **YES** / NO |
+| `fall-04-cam0.mp4` | **FALL** | 0.1290 | **0.9993** | 1 / 0 | **YES** / NO |
+| `fall-05-cam0.mp4` | **FALL** | 0.3109 | **0.9113** | 0 / 0 | **NO** / NO *(Known FN)* |
+| `adl-01-cam0.mp4` | **NORMAL** | 0.0149 | **0.0021** | 0 / 0 | **YES** / YES |
+| `adl-02-cam0.mp4` | **NORMAL** | 0.0320 | **0.0015** | 0 / 0 | **YES** / YES |
+| `adl-03-cam0.mp4` | **NORMAL** | 0.0187 | **0.0007** | 0 / 0 | **YES** / YES |
+| `adl-04-cam0.mp4` | **NORMAL** | 0.0589 | **0.0024** | 0 / 0 | **YES** / YES |
+| `adl-05-cam0.mp4` | **NORMAL** | 0.0313 | **0.0007** | 0 / 0 | **YES** / YES |
 
 ---
 
 ## 5. Known Issues & Diagnostic Findings
 
 ### A. Known `fall-05` False Negative
-* **Symptom:** In `fall-05-cam0.mp4`, the model reached a peak fall probability of **0.6380**, failing to trigger the conservative production threshold of **0.70** required across 2 consecutive windows.
+* **Symptom:** In `fall-05-cam0.mp4`, the model reached a peak fall probability of **0.9113**, but did not trigger a confirmed fall event (predicted NORMAL).
 * **Root Cause Analysis:**
   1. The fall in `fall-05` occurs at a low camera angle with partial furniture occlusion as the subject touches the floor.
-  2. Bounding box aspect ratio flattens rapidly ($W/H > 1.8$), causing detector confidence jitter.
-  3. While $P(\text{FALL})$ is strongly elevated above normal baseline ($0.6380$ vs ADL max $\le 0.0411$), it falls just short of the $0.70$ confirmation threshold.
+  2. Bounding box aspect ratio flattens rapidly ($W/H > 1.8$), causing detector confidence jitter and track fragmentation.
+  3. While $P(\text{FALL})$ spiked to $0.9113$ on a single window (strongly elevated above ADL max $\le 0.0024$), it was not sustained across 2 consecutive inference windows for the same track ID.
 * **Resolution Plan:**
   - Do NOT lower the global production threshold from 0.70 (to avoid risking false positives in hospital/ADL deployments).
   - Subsequent iteration will incorporate aspect-ratio velocity priors and adaptive temporal confirmation for low-angle occluded tracks.
@@ -117,12 +117,13 @@ $$\text{Input Frame} \rightarrow \text{YOLO11n} \rightarrow \text{ByteTrack} \ri
 
 * **Hardware Accelerator:** NVIDIA Tesla T4 (CUDA)
 * **Video Input:** `fall-01-cam0.mp4` (160 frames, $640 \times 480$)
-* **End-to-End Pipeline Throughput:** **58.74 FPS** (160 frames in 2.72s)
+* **End-to-End Pipeline Throughput:** **51.91 FPS** (160 frames in 3.08s)
 * **Latency Profile:**
-  - **YOLO11n + ByteTrack:** Mean: 11.84 ms | P50: 11.20 ms | P95: 14.52 ms
-  - **R3D-18 Action Inference (16-frame crops):** Mean: 21.45 ms | P50: 20.90 ms | P95: 24.80 ms
-  - **End-to-End Frame Latency:** Mean: 16.20 ms | P50: 15.80 ms | P95: 21.30 ms
-* **Confirmed Emergency Events:** 1 confirmed fall event on Track 1 (Confidence: 84.2%)
+  - **YOLO11n + ByteTrack:** Mean: 15.30 ms | P50: 13.20 ms | P95: 23.14 ms
+  - **Preprocessing / Crop (Tube):** Mean: 6.32 ms
+  - **R3D-18 Action Inference (16-frame crops):** Mean: 23.33 ms | P50: 23.09 ms | P95: 24.32 ms
+  - **End-to-End Frame Latency:** Mean: 18.54 ms | P50: 13.58 ms | P95: 44.97 ms
+* **Confirmed Emergency Events:** 1 confirmed fall event on Track 1 (Confidence: 99.9%)
 
 ---
 

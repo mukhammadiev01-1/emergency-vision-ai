@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-09-05T10:22:15.892104+00:00",
+  "timestamp_utc": "2026-09-05T11:04:53.725000+00:00",
   "model_a": {
     "path": "models/action_recognition/r3d18_urfd_person_crops.pth",
     "metrics": {
@@ -10,7 +10,7 @@
       "normal_specificity": 1.00,
       "precision": 1.00,
       "f1_score": 0.8889,
-      "average_fps": 58.42,
+      "average_fps": 65.54,
       "total_confirmed_events": 4,
       "confusion_matrix": {
         "tp": 4,
@@ -21,125 +21,85 @@
     },
     "video_results": [
       {
-        "video_name": "fall-01-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 160,
-        "eval_count": 16,
-        "mean_fall_prob": 0.3421,
-        "max_fall_prob": 0.8421,
-        "confirmed_events_count": 1,
-        "predicted_class": "FALL",
-        "is_correct": true,
-        "fps": 59.10
-      },
-      {
-        "video_name": "fall-02-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 110,
-        "eval_count": 10,
-        "mean_fall_prob": 0.4120,
-        "max_fall_prob": 0.7915,
-        "confirmed_events_count": 1,
-        "predicted_class": "FALL",
-        "is_correct": true,
-        "fps": 58.70
-      },
-      {
-        "video_name": "fall-03-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 215,
-        "eval_count": 30,
-        "mean_fall_prob": 0.4532,
-        "max_fall_prob": 0.8834,
-        "confirmed_events_count": 1,
-        "predicted_class": "FALL",
-        "is_correct": true,
-        "fps": 57.90
-      },
-      {
-        "video_name": "fall-04-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 96,
-        "eval_count": 8,
-        "mean_fall_prob": 0.3120,
-        "max_fall_prob": 0.7512,
-        "confirmed_events_count": 1,
-        "predicted_class": "FALL",
-        "is_correct": true,
-        "fps": 59.40
-      },
-      {
-        "video_name": "fall-05-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 151,
-        "eval_count": 16,
-        "mean_fall_prob": 0.2814,
-        "max_fall_prob": 0.6380,
-        "confirmed_events_count": 0,
-        "predicted_class": "NORMAL",
-        "is_correct": false,
-        "fps": 58.20,
-        "note": "Known false negative: max P=0.6380 elevated but below 0.70 threshold for 2 consecutive windows"
-      },
-      {
         "video_name": "adl-01-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 150,
-        "eval_count": 11,
-        "mean_fall_prob": 0.0112,
-        "max_fall_prob": 0.0210,
+        "max_fall_prob": 0.0021,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 58.60
+        "is_correct": true
       },
       {
         "video_name": "adl-02-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 180,
-        "eval_count": 16,
-        "mean_fall_prob": 0.0175,
-        "max_fall_prob": 0.0385,
+        "max_fall_prob": 0.0015,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 58.10
+        "is_correct": true
       },
       {
         "video_name": "adl-03-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 180,
-        "eval_count": 17,
-        "mean_fall_prob": 0.0105,
-        "max_fall_prob": 0.0192,
+        "max_fall_prob": 0.0007,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 58.30
+        "is_correct": true
       },
       {
         "video_name": "adl-04-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 150,
-        "eval_count": 14,
-        "mean_fall_prob": 0.0191,
-        "max_fall_prob": 0.0411,
+        "max_fall_prob": 0.0024,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 58.50
+        "is_correct": true
       },
       {
         "video_name": "adl-05-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 180,
-        "eval_count": 21,
-        "mean_fall_prob": 0.0158,
-        "max_fall_prob": 0.0320,
+        "max_fall_prob": 0.0007,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 57.80
+        "is_correct": true
+      },
+      {
+        "video_name": "fall-01-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.9995,
+        "confirmed_events_count": 1,
+        "predicted_class": "FALL",
+        "is_correct": true
+      },
+      {
+        "video_name": "fall-02-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.9994,
+        "confirmed_events_count": 1,
+        "predicted_class": "FALL",
+        "is_correct": true
+      },
+      {
+        "video_name": "fall-03-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.9999,
+        "confirmed_events_count": 1,
+        "predicted_class": "FALL",
+        "is_correct": true
+      },
+      {
+        "video_name": "fall-04-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.9993,
+        "confirmed_events_count": 1,
+        "predicted_class": "FALL",
+        "is_correct": true
+      },
+      {
+        "video_name": "fall-05-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.9113,
+        "confirmed_events_count": 0,
+        "predicted_class": "NORMAL",
+        "is_correct": false,
+        "note": "Known false negative: max P=0.9113 but did not maintain >=0.70 across 2 consecutive windows"
       }
     ]
   },
@@ -153,7 +113,7 @@
       "normal_specificity": 1.00,
       "precision": 0.00,
       "f1_score": 0.00,
-      "average_fps": 61.20,
+      "average_fps": 64.38,
       "total_confirmed_events": 0,
       "confusion_matrix": {
         "tp": 0,
@@ -164,124 +124,84 @@
     },
     "video_results": [
       {
-        "video_name": "fall-01-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 160,
-        "eval_count": 16,
-        "mean_fall_prob": 0.0681,
-        "max_fall_prob": 0.2770,
-        "confirmed_events_count": 0,
-        "predicted_class": "NORMAL",
-        "is_correct": false,
-        "fps": 62.52
-      },
-      {
-        "video_name": "fall-02-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 110,
-        "eval_count": 10,
-        "mean_fall_prob": 0.1256,
-        "max_fall_prob": 0.2788,
-        "confirmed_events_count": 0,
-        "predicted_class": "NORMAL",
-        "is_correct": false,
-        "fps": 61.80
-      },
-      {
-        "video_name": "fall-03-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 215,
-        "eval_count": 30,
-        "mean_fall_prob": 0.1115,
-        "max_fall_prob": 0.3445,
-        "confirmed_events_count": 0,
-        "predicted_class": "NORMAL",
-        "is_correct": false,
-        "fps": 60.50
-      },
-      {
-        "video_name": "fall-04-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 96,
-        "eval_count": 8,
-        "mean_fall_prob": 0.0590,
-        "max_fall_prob": 0.1321,
-        "confirmed_events_count": 0,
-        "predicted_class": "NORMAL",
-        "is_correct": false,
-        "fps": 62.10
-      },
-      {
-        "video_name": "fall-05-cam0.mp4",
-        "ground_truth": "FALL",
-        "total_frames": 151,
-        "eval_count": 16,
-        "mean_fall_prob": 0.1240,
-        "max_fall_prob": 0.3681,
-        "confirmed_events_count": 0,
-        "predicted_class": "NORMAL",
-        "is_correct": false,
-        "fps": 61.40
-      },
-      {
         "video_name": "adl-01-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 150,
-        "eval_count": 11,
-        "mean_fall_prob": 0.0100,
         "max_fall_prob": 0.0149,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 61.20
+        "is_correct": true
       },
       {
         "video_name": "adl-02-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 180,
-        "eval_count": 16,
-        "mean_fall_prob": 0.0161,
-        "max_fall_prob": 0.0305,
+        "max_fall_prob": 0.0320,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 60.90
+        "is_correct": true
       },
       {
         "video_name": "adl-03-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 180,
-        "eval_count": 17,
-        "mean_fall_prob": 0.0113,
-        "max_fall_prob": 0.0195,
+        "max_fall_prob": 0.0187,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 61.50
+        "is_correct": true
       },
       {
         "video_name": "adl-04-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 150,
-        "eval_count": 14,
-        "mean_fall_prob": 0.0179,
-        "max_fall_prob": 0.0454,
+        "max_fall_prob": 0.0589,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 61.00
+        "is_correct": true
       },
       {
         "video_name": "adl-05-cam0.mp4",
         "ground_truth": "NORMAL",
-        "total_frames": 180,
-        "eval_count": 21,
-        "mean_fall_prob": 0.0161,
-        "max_fall_prob": 0.0304,
+        "max_fall_prob": 0.0313,
         "confirmed_events_count": 0,
         "predicted_class": "NORMAL",
-        "is_correct": true,
-        "fps": 60.80
+        "is_correct": true
+      },
+      {
+        "video_name": "fall-01-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.2487,
+        "confirmed_events_count": 0,
+        "predicted_class": "NORMAL",
+        "is_correct": false
+      },
+      {
+        "video_name": "fall-02-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.2863,
+        "confirmed_events_count": 0,
+        "predicted_class": "NORMAL",
+        "is_correct": false
+      },
+      {
+        "video_name": "fall-03-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.3129,
+        "confirmed_events_count": 0,
+        "predicted_class": "NORMAL",
+        "is_correct": false
+      },
+      {
+        "video_name": "fall-04-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.1290,
+        "confirmed_events_count": 0,
+        "predicted_class": "NORMAL",
+        "is_correct": false
+      },
+      {
+        "video_name": "fall-05-cam0.mp4",
+        "ground_truth": "FALL",
+        "max_fall_prob": 0.3109,
+        "confirmed_events_count": 0,
+        "predicted_class": "NORMAL",
+        "is_correct": false
       }
     ]
   },
