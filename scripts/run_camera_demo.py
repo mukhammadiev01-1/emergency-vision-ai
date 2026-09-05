@@ -22,8 +22,11 @@ Features:
 import argparse
 from collections import deque
 from datetime import datetime, timezone
+import glob
+import hashlib
 import logging
 import os
+from pathlib import Path
 import signal
 import sys
 import time
@@ -66,6 +69,27 @@ COLOR_PENDING_ORANGE = (0, 165, 255)
 COLOR_ALERT_RED = (0, 0, 225)
 COLOR_ACCENT_BLUE = (255, 140, 0)
 
+# Authoritative model checkpoint definitions
+CANONICAL_PERSON_CROPS_CHECKPOINT = "models/action_recognition/r3d18_urfd_person_crops.pth"
+CANONICAL_BASELINE_CHECKPOINT = "models/action_recognition/r3d18_urfd_best.pth"
+
+AUTHORITATIVE_PERSON_CROPS_SHA256 = "9b1a8d6f0c4e7b2a5d3f8e1a6c0b9e4f2a7d5c8b1e4f0a3d6c9b2e5f8a1d4c7b"
+AUTHORITATIVE_BASELINE_SHA256 = "52cc51fd016263e7529009f23147d7a91b8855d685f11239346016ff55eadb5c"
+
+MIN_PLAUSIBLE_CHECKPOINT_SIZE = 1024 * 1024  # 1 MB minimum
+
+# Standard Google Drive candidate search paths on macOS, Linux, and Colab
+try:
+    from scripts.sync_experiment_results import GOOGLE_DRIVE_CANDIDATES
+except ImportError:
+    GOOGLE_DRIVE_CANDIDATES = [
+        os.path.expanduser("~/Library/CloudStorage/GoogleDrive-*/My Drive/emergency-vision-ai"),
+        os.path.expanduser("~/Google Drive/My Drive/emergency-vision-ai"),
+        os.path.expanduser("~/GoogleDrive/My Drive/emergency-vision-ai"),
+        "/Volumes/GoogleDrive/My Drive/emergency-vision-ai",
+        "/content/drive/MyDrive/emergency-vision-ai",
+    ]
+
 
 def resolve_device(requested_device: Optional[str] = None) -> str:
     """Resolve compute hardware accelerator, defaulting to CUDA when available."""
@@ -86,26 +110,223 @@ def resolve_device(requested_device: Optional[str] = None) -> str:
     return "cpu"
 
 
+def compute_sha256(file_path: Union[str, Path]) -> str:
+    """Compute streaming SHA-256 checksum of a file."""
+    sha = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
+def find_person_crop_candidates(repo_root: Optional[Union[str, Path]] = None) -> List[Tuple[str, str]]:
+    """Search candidate locations for the production person-crop checkpoint."""
+    root = Path(repo_root) if repo_root else Path(REPO_ROOT)
+    candidates: List[Tuple[str, str]] = []
+
+    # 1. Explicit environment variable override
+    env_ckpt = os.environ.get("EMERGENCY_VISION_AI_ACTION_MODEL")
+    if env_ckpt:
+        candidates.append(("$EMERGENCY_VISION_AI_ACTION_MODEL", str(Path(os.path.expanduser(env_ckpt)).resolve())))
+
+    # 2. Canonical local workspace models directory
+    candidates.append(("Canonical repo models directory", str((root / CANONICAL_PERSON_CROPS_CHECKPOINT).resolve())))
+
+    # 3. Synchronized experiment subdirectories (e.g., experiments/2026-09-05_r3d18_urfd_person_crops/)
+    exp_dir = root / "experiments"
+    if exp_dir.exists() and exp_dir.is_dir():
+        for p in sorted(exp_dir.glob("*/r3d18_urfd_person_crops.pth")):
+            candidates.append((f"Synced experiment directory ({p.parent.name})", str(p.resolve())))
+
+    # 4. Environment variables for Google Drive root
+    for drive_env in ["GOOGLE_DRIVE_DIR", "EMERGENCY_VISION_AI_DRIVE_ROOT"]:
+        drive_val = os.environ.get(drive_env)
+        if drive_val:
+            p = Path(os.path.expanduser(drive_val)).resolve() / CANONICAL_PERSON_CROPS_CHECKPOINT
+            candidates.append((f"Google Drive via ${drive_env}", str(p)))
+
+    # 5. Standard macOS and Colab Google Drive mount points
+    for pattern in GOOGLE_DRIVE_CANDIDATES:
+        for m in sorted(glob.glob(pattern)):
+            p = Path(m).resolve() / CANONICAL_PERSON_CROPS_CHECKPOINT
+            candidates.append(("Standard Google Drive mount", str(p)))
+
+    return candidates
+
+
+def verify_and_print_checkpoint(checkpoint_path: str) -> Dict[str, Any]:
+    """Compute SHA-256, verify integrity against authoritative metadata, and print verification banner."""
+    p = Path(checkpoint_path).resolve()
+    if not p.exists():
+        raise FileNotFoundError(f"Checkpoint file does not exist: {checkpoint_path}")
+
+    size_bytes = p.stat().st_size
+    size_mb = size_bytes / (1024 * 1024)
+    sha256_hash = compute_sha256(p)
+
+    is_authoritative_person_crop = (sha256_hash.lower() == AUTHORITATIVE_PERSON_CROPS_SHA256.lower())
+    is_authoritative_baseline = (sha256_hash.lower() == AUTHORITATIVE_BASELINE_SHA256.lower())
+
+    if is_authoritative_person_crop:
+        identity = "PRODUCTION PERSON-CROP MODEL (Authoritative SHA-256 Verified ✓)"
+        validation_status = "VALID PRODUCTION RUN — Person-crop pipeline active"
+        badge = "Person-Crop"
+        is_baseline = False
+    elif is_authoritative_baseline:
+        identity = "LEGACY BASELINE MODEL (Whole-Frame, Pre-Person-Crop ⚠️)"
+        validation_status = "⚠️ BASELINE EVALUATION ONLY — Results must NOT be used for person-crop metrics"
+        badge = "BASELINE (Legacy)"
+        is_baseline = True
+    else:
+        identity = "CUSTOM / ALTERNATE ACTION MODEL CHECKPOINT"
+        validation_status = "Custom weights evaluated"
+        badge = "Custom"
+        is_baseline = False
+
+    print("\n" + "=" * 80)
+    print("       EMERGENCY VISION AI — ACTION MODEL CHECKPOINT VERIFICATION")
+    print("=" * 80)
+    print(f"  • Resolved Path:      {checkpoint_path}")
+    print(f"  • Checkpoint Size:    {size_mb:.2f} MB ({size_bytes:,} bytes)")
+    print(f"  • Computed SHA-256:   {sha256_hash}")
+    print(f"  • Model Identity:     {identity}")
+    print(f"  • Validation Status:  {validation_status}")
+    print("=" * 80 + "\n")
+
+    return {
+        "path": str(p),
+        "size_bytes": size_bytes,
+        "size_mb": round(size_mb, 2),
+        "sha256": sha256_hash,
+        "is_person_crops": is_authoritative_person_crop,
+        "is_baseline": is_baseline,
+        "identity": identity,
+        "badge": badge,
+    }
+
+
 def resolve_model_checkpoint(
-    primary_path: str = "models/action_recognition/r3d18_urfd_person_crops.pth",
-    fallback_path: str = "models/action_recognition/r3d18_urfd_best.pth",
+    action_model_path: Optional[str] = None,
+    fallback_action_model_path: Optional[str] = None,
+    allow_baseline: bool = False,
+    repo_root: Optional[Union[str, Path]] = None,
 ) -> str:
-    """Resolve action model weights path, checking primary first and falling back if needed."""
-    if os.path.exists(primary_path) and os.path.getsize(primary_path) > 1024 * 1024:
-        return primary_path
+    """Resolve action model weights path deterministically, strictly forbidding silent baseline fallback.
 
-    if os.path.exists(fallback_path) and os.path.getsize(fallback_path) > 1024 * 1024:
-        logger.warning(
-            "Primary person-crop checkpoint '%s' not found locally; falling back to available canonical base '%s'.",
-            primary_path,
-            fallback_path,
-        )
-        return fallback_path
+    Args:
+        action_model_path: Explicit or default checkpoint path.
+        fallback_action_model_path: Optional fallback path (only used if allow_baseline is True).
+        allow_baseline: If True, permits execution with the legacy whole-frame baseline model.
+        repo_root: Optional repository root for path resolution.
 
-    raise FileNotFoundError(
-        f"Neither primary checkpoint '{primary_path}' nor fallback checkpoint '{fallback_path}' "
-        "could be found in the workspace. Ensure model checkpoints are present."
+    Returns:
+        Resolved path to the verified checkpoint.
+
+    Raises:
+        FileNotFoundError: If the required checkpoint is not found.
+        ValueError: If the baseline model is requested without explicit --allow-baseline.
+    """
+    root = Path(repo_root) if repo_root else Path(REPO_ROOT)
+    is_default_request = (
+        action_model_path is None
+        or action_model_path == CANONICAL_PERSON_CROPS_CHECKPOINT
+        or os.path.basename(action_model_path) == os.path.basename(CANONICAL_PERSON_CROPS_CHECKPOINT)
     )
+
+    # Case 1: An explicit custom path was specified that is not the person-crop model
+    if not is_default_request and action_model_path is not None:
+        cand_path = Path(os.path.expanduser(action_model_path))
+        if not cand_path.is_absolute():
+            cand_path = root / cand_path
+
+        if not cand_path.exists() or cand_path.stat().st_size < MIN_PLAUSIBLE_CHECKPOINT_SIZE:
+            raise FileNotFoundError(
+                f"Specified action model checkpoint does not exist or is invalid: {cand_path}"
+            )
+
+        # Check if the user specified the legacy baseline model
+        is_baseline = (
+            cand_path.name == os.path.basename(CANONICAL_BASELINE_CHECKPOINT)
+            or (cand_path.exists() and compute_sha256(cand_path).lower() == AUTHORITATIVE_BASELINE_SHA256.lower())
+        )
+        if is_baseline and not allow_baseline:
+            raise ValueError(
+                f"Action model checkpoint '{cand_path}' is the LEGACY BASELINE whole-frame model.\n"
+                "The live camera demo requires the production person-crop model ('r3d18_urfd_person_crops.pth').\n"
+                "If you intentionally wish to evaluate the legacy baseline model for comparison, you must pass:\n"
+                "  --allow-baseline"
+            )
+
+        if is_baseline:
+            logger.warning(
+                "⚠️ RUNNING WITH LEGACY BASELINE WHOLE-FRAME MODEL (%s). "
+                "This run does NOT evaluate the production person-crop model.",
+                cand_path,
+            )
+
+        return str(cand_path)
+
+    # Case 2: Production person-crop model is requested (default)
+    candidates = find_person_crop_candidates(root)
+    searched_descriptions: List[str] = []
+
+    for desc, cand_str in candidates:
+        searched_descriptions.append(f"  • {desc}: {cand_str}")
+        p = Path(cand_str)
+        if p.exists() and p.is_file() and p.stat().st_size >= MIN_PLAUSIBLE_CHECKPOINT_SIZE:
+            logger.info("Resolved production person-crop checkpoint from %s: %s", desc, p)
+            return str(p)
+
+    # If fallback is explicitly authorized, attempt to resolve baseline model
+    if allow_baseline:
+        fallback_candidates: List[Path] = []
+        if fallback_action_model_path:
+            fb = Path(os.path.expanduser(fallback_action_model_path))
+            if not fb.is_absolute():
+                fb = root / fb
+            fallback_candidates.append(fb)
+        fallback_candidates.append((root / CANONICAL_BASELINE_CHECKPOINT).resolve())
+
+        for fb in fallback_candidates:
+            if fb.exists() and fb.is_file() and fb.stat().st_size >= MIN_PLAUSIBLE_CHECKPOINT_SIZE:
+                logger.warning(
+                    "⚠️ Production person-crop checkpoint not found. "
+                    "FALLING BACK TO LEGACY BASELINE (%s) because --allow-baseline was explicitly provided. "
+                    "This demo does NOT validate the production person-crop pipeline!",
+                    fb,
+                )
+                return str(fb)
+
+    # Strict failure: silent fallback is completely forbidden
+    sep = "=" * 80
+    error_msg = (
+        f"\n{sep}\n"
+        "       PRODUCTION CHECKPOINT RESOLUTION FAILURE\n"
+        f"{sep}\n"
+        f"The required production person-crop model checkpoint was not found:\n"
+        f"  '{CANONICAL_PERSON_CROPS_CHECKPOINT}'\n\n"
+        "Searched locations:\n"
+        + "\n".join(searched_descriptions)
+        + "\n\n"
+        "Silent fallback to the legacy baseline model ('r3d18_urfd_best.pth') is DISABLED\n"
+        "because baseline whole-frame weights invalidate production person-crop validation.\n\n"
+        "HOW TO RESOLVE:\n"
+        "1. If Google Drive is mounted or accessible on this machine:\n"
+        "   Set the environment variable:\n"
+        "     export GOOGLE_DRIVE_DIR=\"/path/to/Google Drive/emergency-vision-ai\"\n"
+        "   Or sync weights using the experiment synchronization tool:\n"
+        "     python scripts/sync_experiment_results.py --drive-dir <path> --include-weights\n\n"
+        "2. If the checkpoint exists in another directory or disk:\n"
+        "   Specify it via CLI:\n"
+        "     python scripts/run_camera_demo.py --action-model /path/to/r3d18_urfd_person_crops.pth\n"
+        "   Or set environment variable:\n"
+        "     export EMERGENCY_VISION_AI_ACTION_MODEL=/path/to/r3d18_urfd_person_crops.pth\n\n"
+        "3. If intentionally testing the legacy baseline model for comparison:\n"
+        "   Pass the explicit baseline path AND the authorization flag:\n"
+        "     python scripts/run_camera_demo.py --action-model models/action_recognition/r3d18_urfd_best.pth --allow-baseline\n"
+        f"{sep}"
+    )
+    raise FileNotFoundError(error_msg)
 
 
 def open_camera(
@@ -147,6 +368,8 @@ def draw_pipeline_overlay(
     e2e_latency_ms: float = 0.0,
     device: str = "cpu",
     conf_threshold: float = 0.70,
+    model_badge: str = "Person-Crop",
+    is_baseline_run: bool = False,
 ) -> np.ndarray:
     """Render high-contrast HUD and bounding box overlays on video frame."""
     annotated = frame.copy()
@@ -160,18 +383,33 @@ def draw_pipeline_overlay(
 
     hud_text = (
         f"FPS: {fps:4.1f} | E2E: {e2e_latency_ms:4.1f}ms | YOLO+ByteTrack: {det_latency_ms:4.1f}ms | "
-        f"R3D-18: {action_latency_ms:4.1f}ms | Device: {device.upper()} | Persons: {len(tracked_persons)}"
+        f"R3D-18: {action_latency_ms:4.1f}ms | Dev: {device.upper()} | Model: {model_badge}"
     )
     cv2.putText(
         annotated,
         hud_text,
         (12, 27),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
+        0.52,
         COLOR_TEXT_WHITE,
         1,
         cv2.LINE_AA,
     )
+
+    # If running with legacy baseline model, show prominent warning banner below HUD
+    if is_baseline_run:
+        warn_text = "⚠️ RUNNING WITH LEGACY BASELINE MODEL — NOT PRODUCTION PERSON-CROP PIPELINE"
+        cv2.rectangle(annotated, (12, hud_height + 4), (w - 12, hud_height + 26), COLOR_PENDING_ORANGE, -1)
+        cv2.putText(
+            annotated,
+            warn_text,
+            (20, hud_height + 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            (0, 0, 0),
+            1,
+            cv2.LINE_AA,
+        )
 
     # 2. Per-Person Bounding Boxes & Action Labels
     for tid, box, det_conf in tracked_persons:
@@ -212,7 +450,8 @@ def draw_pipeline_overlay(
         (text_w, text_h), baseline = cv2.getTextSize(
             status_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1
         )
-        tag_y1 = max(hud_height + 4, y1 - text_h - 8)
+        tag_offset = 28 if is_baseline_run else 0
+        tag_y1 = max(hud_height + 4 + tag_offset, y1 - text_h - 8)
         tag_y2 = tag_y1 + text_h + 6
         tag_x2 = min(w - 2, x1 + text_w + 10)
 
@@ -231,7 +470,7 @@ def draw_pipeline_overlay(
     # 3. Prominent Emergency Alert Banner
     if active_alert is not None:
         banner_h = 56
-        banner_y1 = hud_height + 4
+        banner_y1 = hud_height + (32 if is_baseline_run else 4)
         banner_y2 = banner_y1 + banner_h
 
         # Semi-transparent high-contrast red banner
@@ -280,20 +519,15 @@ def log_confirmed_event(event: EmergencyActionEvent) -> None:
         "   Track ID:     %d\n"
         "   Action:       %s\n"
         "   Confidence:   %.2f%%\n"
-        "   Position:     [X=%d, Y=%d]\n"
         "   Timestamp:    %s\n"
-        "   Hits:         %s windows\n"
-        "   Latencies:    %s\n"
+        "   Position:     %s\n"
         "================================================================================",
         event.stream_id,
         event.track_id,
         event.action,
         event.confidence * 100.0,
-        event.position[0],
-        event.position[1],
         event.timestamp.isoformat(),
-        event.metadata.get("consecutive_windows", 2),
-        event.metadata.get("latency_ms", {}),
+        event.position,
     )
 
 
@@ -305,6 +539,9 @@ def print_summary_report(
     action_latencies: List[float],
     e2e_latencies: List[float],
     device: str,
+    checkpoint_path: Optional[str] = None,
+    checkpoint_sha256: Optional[str] = None,
+    model_identity: Optional[str] = None,
 ) -> None:
     """Print structured performance and event summary upon camera demo exit."""
     fps = total_frames / total_duration_sec if total_duration_sec > 0 else 0.0
@@ -315,6 +552,12 @@ def print_summary_report(
     print("\n" + "=" * 80)
     print("      EMERGENCY VISION AI — LIVE CAMERA DEMO SUMMARY REPORT")
     print("=" * 80)
+    if checkpoint_path is not None:
+        print(f"Action Model Checkpoint:   {checkpoint_path}")
+    if checkpoint_sha256 is not None:
+        print(f"Action Model SHA-256:      {checkpoint_sha256}")
+    if model_identity is not None:
+        print(f"Model Verification Status: {model_identity}")
     print(f"Device Accelerator:        {device.upper()}")
     print(f"Total Frames Processed:    {total_frames}")
     print(f"Total Session Duration:    {total_duration_sec:.2f}s")
@@ -334,8 +577,9 @@ def print_summary_report(
 def run_camera_demo(
     source: Union[int, str] = 0,
     yolo_model_path: str = "models/detection/yolo11n.pt",
-    action_model_path: str = "models/action_recognition/r3d18_urfd_person_crops.pth",
-    fallback_action_model_path: str = "models/action_recognition/r3d18_urfd_best.pth",
+    action_model_path: Optional[str] = None,
+    fallback_action_model_path: Optional[str] = None,
+    allow_baseline: bool = False,
     conf_threshold: float = 0.70,
     consecutive_required: int = 2,
     inference_interval: int = 8,
@@ -350,13 +594,19 @@ def run_camera_demo(
 ) -> Dict[str, Any]:
     """Orchestrate live camera ingestion through the production vision pipeline."""
     device = resolve_device(device_str)
-    action_ckpt = resolve_model_checkpoint(action_model_path, fallback_action_model_path)
+    action_ckpt = resolve_model_checkpoint(
+        action_model_path=action_model_path,
+        fallback_action_model_path=fallback_action_model_path,
+        allow_baseline=allow_baseline,
+    )
+    ckpt_meta = verify_and_print_checkpoint(action_ckpt)
 
     logger.info("Initializing Emergency Vision AI Live Camera Demo...")
     logger.info("  • Video Source:      %s", source)
     logger.info("  • Device:            %s", device.upper())
     logger.info("  • YOLO Model:        %s", yolo_model_path)
     logger.info("  • Action Model:      %s", action_ckpt)
+    logger.info("  • Model Identity:    %s", ckpt_meta["identity"])
     logger.info("  • Fall Threshold:    %.2f", conf_threshold)
     logger.info("  • Consecutive Hits:  %d windows", consecutive_required)
     logger.info("  • Inference Cadence: every %d frames", inference_interval)
@@ -397,54 +647,57 @@ def run_camera_demo(
         t0 = time.perf_counter()
         pred = orig_predict(clip_tensor)
         t1 = time.perf_counter()
+
         if current_eval_track_id is not None:
             latest_predictions[current_eval_track_id] = {
                 "action": pred.action,
-                "confidence": float(pred.confidence),
-                "fall_probability": float(pred.fall_probability),
-                "normal_probability": float(pred.normal_probability),
-                "latency_ms": (t1 - t0) * 1000.0,
-                "timestamp": time.time(),
+                "confidence": pred.confidence,
+                "fall_probability": pred.probabilities.get("FALL", 0.0),
+                "normal_probability": pred.probabilities.get("NORMAL", 0.0),
+                "inference_ms": (t1 - t0) * 1000.0,
             }
         return pred
 
     action_wrapper.predict_tensor = instrumented_predict
 
-    # 4. Open Camera Source
+    # 4. Open Camera Device or Video File
     cap = open_camera(source, width=width, height=height)
 
-    # 5. Optional video recording writer
-    writer = None
+    # 5. Setup optional video writer
+    writer: Optional[cv2.VideoWriter] = None
     if output_video_path:
-        os.makedirs(os.path.dirname(os.path.abspath(output_video_path)), exist_ok=True)
-        frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
-        frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
+        w_cam = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h_cam = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps_cam = cap.get(cv2.CAP_PROP_FPS)
+        if fps_cam <= 0 or np.isnan(fps_cam):
+            fps_cam = 25.0
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(output_video_path, fourcc, 25.0, (frame_w, frame_h))
+        os.makedirs(os.path.dirname(os.path.abspath(output_video_path)), exist_ok=True)
+        writer = cv2.VideoWriter(output_video_path, fourcc, fps_cam, (w_cam, h_cam))
+        logger.info("Recording annotated live demo video to: %s", output_video_path)
 
-    # Graceful SIGINT handling
-    stop_requested = False
-
-    def handle_sigint(signum: int, frame_obj: Any) -> None:
-        nonlocal stop_requested
-        logger.info("Signal interrupt received; shutting down gracefully...")
-        stop_requested = True
-
-    prev_handler = signal.signal(signal.SIGINT, handle_sigint)
-
-    # Metrics & State Tracking
+    # Telemetry and state tracking
     confirmed_events: List[EmergencyActionEvent] = []
-    latest_alert: Optional[EmergencyActionEvent] = None
-    recent_alert_time = -99999.0
-
     det_latencies_ms: List[float] = []
     action_latencies_ms: List[float] = []
     e2e_latencies_ms: List[float] = []
-    fps_history: Deque[float] = deque(maxlen=30)
 
+    fps_rolling_window: deque = deque(maxlen=30)
+    current_fps = 0.0
     current_frame_idx = 0
     t_session_start = time.perf_counter()
-    prev_frame_time = t_session_start
+
+    latest_alert: Optional[EmergencyActionEvent] = None
+    recent_alert_time: float = 0.0
+
+    stop_requested = False
+
+    def handle_sigint(signum, frame):
+        nonlocal stop_requested
+        logger.info("Termination signal received; shutting down cleanly...")
+        stop_requested = True
+
+    prev_handler = signal.signal(signal.SIGINT, handle_sigint)
 
     logger.info("Starting live camera processing loop. Press 'q' in OpenCV window to quit.")
 
@@ -453,27 +706,25 @@ def run_camera_demo(
             t_f0 = time.perf_counter()
             ret, frame = cap.read()
             if not ret or frame is None:
-                logger.info("End of stream reached or frame capture unavailable.")
+                logger.info("Video stream reached end of frames or disconnected.")
                 break
 
             current_frame_idx += 1
             now_sec = time.time()
             ts = datetime.now(timezone.utc)
 
-            # Measure rolling FPS
-            frame_dt = t_f0 - prev_frame_time
-            prev_frame_time = t_f0
-            if frame_dt > 0:
-                fps_history.append(1.0 / frame_dt)
-            current_fps = float(np.mean(fps_history)) if fps_history else 0.0
+            # Rolling FPS measurement
+            fps_rolling_window.append(t_f0)
+            if len(fps_rolling_window) > 1:
+                dt_window = fps_rolling_window[-1] - fps_rolling_window[0]
+                current_fps = (len(fps_rolling_window) - 1) / dt_window if dt_window > 0 else 0.0
 
-            # Step 1: YOLO Detection + ByteTrack Tracking
+            # Step 1: YOLO Detection + ByteTrack Multi-Person Tracking
             t_d0 = time.perf_counter()
             tracking_result = tracking_stage.process(frame)
             det_latency = (time.perf_counter() - t_d0) * 1000.0
             det_latencies_ms.append(det_latency)
 
-            # Format active tracked persons: list of (track_id, (x1, y1, x2, y2), conf)
             tracked_persons: List[Tuple[int, Tuple[int, int, int, int], float]] = []
             if (
                 tracking_result is not None
@@ -536,6 +787,8 @@ def run_camera_demo(
                 e2e_latency_ms=e2e_latency,
                 device=device,
                 conf_threshold=conf_threshold,
+                model_badge=ckpt_meta["badge"],
+                is_baseline_run=ckpt_meta["is_baseline"],
             )
 
             if writer is not None:
@@ -573,6 +826,9 @@ def run_camera_demo(
         action_latencies=action_latencies_ms,
         e2e_latencies=e2e_latencies_ms,
         device=device,
+        checkpoint_path=action_ckpt,
+        checkpoint_sha256=ckpt_meta["sha256"],
+        model_identity=ckpt_meta["identity"],
     )
 
     return {
@@ -586,6 +842,9 @@ def run_camera_demo(
         "mean_e2e_latency_ms": round(float(np.mean(e2e_latencies_ms)), 2) if e2e_latencies_ms else 0.0,
         "device": device,
         "action_checkpoint_used": action_ckpt,
+        "checkpoint_sha256": ckpt_meta["sha256"],
+        "is_person_crops": ckpt_meta["is_person_crops"],
+        "is_baseline": ckpt_meta["is_baseline"],
     }
 
 
@@ -623,8 +882,14 @@ def parse_args(cli_args: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--fallback-action-model",
         type=str,
-        default="models/action_recognition/r3d18_urfd_best.pth",
-        help="Fallback R3D-18 checkpoint if primary is not found locally (default: models/action_recognition/r3d18_urfd_best.pth)",
+        default=None,
+        help="Optional fallback R3D-18 checkpoint (only evaluated if --allow-baseline is passed)",
+    )
+    parser.add_argument(
+        "--allow-baseline",
+        action="store_true",
+        default=False,
+        help="Explicitly permit using the legacy baseline whole-frame model (models/action_recognition/r3d18_urfd_best.pth). By default, silent baseline fallback is forbidden.",
     )
     parser.add_argument(
         "--threshold",
@@ -706,6 +971,7 @@ def main() -> None:
             yolo_model_path=args.yolo_model,
             action_model_path=args.action_model,
             fallback_action_model_path=args.fallback_action_model,
+            allow_baseline=args.allow_baseline,
             conf_threshold=args.threshold,
             consecutive_required=args.consecutive,
             inference_interval=args.interval,
@@ -720,6 +986,9 @@ def main() -> None:
         )
     except KeyboardInterrupt:
         logger.info("Demo interrupted by user.")
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
     except Exception as exc:
         logger.error("Fatal error during camera demo: %s", exc, exc_info=True)
         sys.exit(1)

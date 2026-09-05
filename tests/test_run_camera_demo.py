@@ -13,7 +13,13 @@ import torch
 from apps.worker.app.pipeline.action_recognition import TrackActionState
 from apps.worker.app.pipeline.events import EmergencyActionEvent
 from scripts.run_camera_demo import (
+    AUTHORITATIVE_BASELINE_SHA256,
+    AUTHORITATIVE_PERSON_CROPS_SHA256,
+    CANONICAL_BASELINE_CHECKPOINT,
+    CANONICAL_PERSON_CROPS_CHECKPOINT,
+    compute_sha256,
     draw_pipeline_overlay,
+    find_person_crop_candidates,
     log_confirmed_event,
     open_camera,
     parse_args,
@@ -21,6 +27,7 @@ from scripts.run_camera_demo import (
     resolve_device,
     resolve_model_checkpoint,
     run_camera_demo,
+    verify_and_print_checkpoint,
 )
 
 
@@ -28,7 +35,7 @@ class TestCameraDemo(unittest.TestCase):
     """Test suite covering live camera demo logic, argument parsing, and overlays."""
 
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp()
+        self.test_dir = os.path.realpath(tempfile.mkdtemp())
 
     def tearDown(self):
         if os.path.exists(self.test_dir):
@@ -48,7 +55,8 @@ class TestCameraDemo(unittest.TestCase):
         self.assertFalse(args.headless)
         self.assertEqual(args.yolo_model, "models/detection/yolo11n.pt")
         self.assertEqual(args.action_model, "models/action_recognition/r3d18_urfd_person_crops.pth")
-        self.assertEqual(args.fallback_action_model, "models/action_recognition/r3d18_urfd_best.pth")
+        self.assertIsNone(args.fallback_action_model)
+        self.assertFalse(args.allow_baseline)
 
     def test_parse_args_custom_overrides(self):
         """Verify CLI overrides for camera, thresholds, and execution modes."""
@@ -64,6 +72,7 @@ class TestCameraDemo(unittest.TestCase):
             "--max-frames", "50",
             "--width", "1280",
             "--height", "720",
+            "--allow-baseline",
         ])
         self.assertEqual(args.camera_index, "1")
         self.assertEqual(args.threshold, 0.85)
@@ -76,6 +85,7 @@ class TestCameraDemo(unittest.TestCase):
         self.assertEqual(args.max_frames, 50)
         self.assertEqual(args.width, 1280)
         self.assertEqual(args.height, 720)
+        self.assertTrue(args.allow_baseline)
 
     def test_resolve_device(self):
         """Verify device resolution for auto, cpu, and unavailable cuda."""
@@ -84,34 +94,118 @@ class TestCameraDemo(unittest.TestCase):
             self.assertEqual(resolve_device("cuda"), "cpu")
             self.assertEqual(resolve_device("auto"), "mps" if (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()) else "cpu")
 
-    def test_resolve_model_checkpoint_prefers_primary(self):
-        """Verify primary checkpoint is selected when it exists and has valid size."""
-        primary = os.path.join(self.test_dir, "primary.pth")
-        fallback = os.path.join(self.test_dir, "fallback.pth")
+    def test_resolve_model_checkpoint_canonical_local(self):
+        """Verify primary checkpoint is discovered in canonical local models directory."""
+        mock_models_dir = os.path.join(self.test_dir, "models", "action_recognition")
+        os.makedirs(mock_models_dir, exist_ok=True)
+        primary = os.path.join(mock_models_dir, "r3d18_urfd_person_crops.pth")
         with open(primary, "wb") as f:
             f.write(b"0" * (1024 * 1024 + 10))
-        with open(fallback, "wb") as f:
-            f.write(b"0" * (1024 * 1024 + 10))
 
-        resolved = resolve_model_checkpoint(primary, fallback)
+        resolved = resolve_model_checkpoint(repo_root=self.test_dir)
         self.assertEqual(resolved, primary)
 
-    def test_resolve_model_checkpoint_falls_back(self):
-        """Verify fallback checkpoint is selected when primary does not exist."""
-        primary = os.path.join(self.test_dir, "missing_primary.pth")
-        fallback = os.path.join(self.test_dir, "fallback.pth")
-        with open(fallback, "wb") as f:
+    def test_resolve_model_checkpoint_env_var_override(self):
+        """Verify explicit environment variable EMERGENCY_VISION_AI_ACTION_MODEL takes precedence."""
+        custom_ckpt = os.path.join(self.test_dir, "custom_person_crops.pth")
+        with open(custom_ckpt, "wb") as f:
             f.write(b"0" * (1024 * 1024 + 10))
 
-        resolved = resolve_model_checkpoint(primary, fallback)
-        self.assertEqual(resolved, fallback)
+        with patch.dict(os.environ, {"EMERGENCY_VISION_AI_ACTION_MODEL": custom_ckpt}):
+            resolved = resolve_model_checkpoint(repo_root=self.test_dir)
+            self.assertEqual(resolved, custom_ckpt)
 
-    def test_resolve_model_checkpoint_missing_all_raises(self):
-        """Verify FileNotFoundError is raised when neither primary nor fallback exists."""
-        primary = os.path.join(self.test_dir, "missing1.pth")
-        fallback = os.path.join(self.test_dir, "missing2.pth")
-        with self.assertRaises(FileNotFoundError):
-            resolve_model_checkpoint(primary, fallback)
+    def test_resolve_model_checkpoint_synced_experiments(self):
+        """Verify checkpoint is discovered in synced experiments subdirectories."""
+        exp_dir = os.path.join(self.test_dir, "experiments", "2026-09-05_r3d18_urfd_person_crops")
+        os.makedirs(exp_dir, exist_ok=True)
+        exp_ckpt = os.path.join(exp_dir, "r3d18_urfd_person_crops.pth")
+        with open(exp_ckpt, "wb") as f:
+            f.write(b"0" * (1024 * 1024 + 10))
+
+        resolved = resolve_model_checkpoint(repo_root=self.test_dir)
+        self.assertEqual(resolved, exp_ckpt)
+
+    def test_resolve_model_checkpoint_google_drive_env(self):
+        """Verify checkpoint is discovered via GOOGLE_DRIVE_DIR environment variable."""
+        drive_dir = os.path.join(self.test_dir, "google_drive")
+        mock_drive_models = os.path.join(drive_dir, "models", "action_recognition")
+        os.makedirs(mock_drive_models, exist_ok=True)
+        drive_ckpt = os.path.join(mock_drive_models, "r3d18_urfd_person_crops.pth")
+        with open(drive_ckpt, "wb") as f:
+            f.write(b"0" * (1024 * 1024 + 10))
+
+        with patch.dict(os.environ, {"GOOGLE_DRIVE_DIR": drive_dir}):
+            resolved = resolve_model_checkpoint(repo_root=self.test_dir)
+            self.assertEqual(resolved, drive_ckpt)
+
+    def test_resolve_model_checkpoint_strictly_refuses_silent_fallback(self):
+        """Verify FileNotFoundError is raised with clear instructions when person crops is missing."""
+        # Baseline exists, but person-crops does NOT exist
+        mock_models_dir = os.path.join(self.test_dir, "models", "action_recognition")
+        os.makedirs(mock_models_dir, exist_ok=True)
+        baseline = os.path.join(mock_models_dir, "r3d18_urfd_best.pth")
+        with open(baseline, "wb") as f:
+            f.write(b"0" * (1024 * 1024 + 10))
+
+        # Default resolution without allow_baseline MUST fail and NOT silently use baseline
+        with self.assertRaises(FileNotFoundError) as ctx:
+            resolve_model_checkpoint(repo_root=self.test_dir, allow_baseline=False)
+
+        err_msg = str(ctx.exception)
+        self.assertIn("Silent fallback to the legacy baseline model ('r3d18_urfd_best.pth') is DISABLED", err_msg)
+        self.assertIn("HOW TO RESOLVE", err_msg)
+        self.assertIn("export GOOGLE_DRIVE_DIR", err_msg)
+        self.assertIn("--allow-baseline", err_msg)
+
+    def test_resolve_model_checkpoint_explicit_baseline_without_flag_raises(self):
+        """Verify passing baseline checkpoint path without --allow-baseline raises ValueError."""
+        mock_models_dir = os.path.join(self.test_dir, "models", "action_recognition")
+        os.makedirs(mock_models_dir, exist_ok=True)
+        baseline = os.path.join(mock_models_dir, "r3d18_urfd_best.pth")
+        with open(baseline, "wb") as f:
+            f.write(b"0" * (1024 * 1024 + 10))
+
+        with self.assertRaises(ValueError) as ctx:
+            resolve_model_checkpoint(action_model_path=baseline, allow_baseline=False, repo_root=self.test_dir)
+
+        self.assertIn("LEGACY BASELINE", str(ctx.exception))
+        self.assertIn("--allow-baseline", str(ctx.exception))
+
+    def test_resolve_model_checkpoint_explicit_baseline_with_flag_permitted(self):
+        """Verify passing baseline checkpoint path with --allow-baseline succeeds."""
+        mock_models_dir = os.path.join(self.test_dir, "models", "action_recognition")
+        os.makedirs(mock_models_dir, exist_ok=True)
+        baseline = os.path.join(mock_models_dir, "r3d18_urfd_best.pth")
+        with open(baseline, "wb") as f:
+            f.write(b"0" * (1024 * 1024 + 10))
+
+        resolved = resolve_model_checkpoint(action_model_path=baseline, allow_baseline=True, repo_root=self.test_dir)
+        self.assertEqual(resolved, baseline)
+
+    def test_resolve_model_checkpoint_fallback_when_explicitly_allowed(self):
+        """Verify fallback to baseline is permitted when allow_baseline is True."""
+        mock_models_dir = os.path.join(self.test_dir, "models", "action_recognition")
+        os.makedirs(mock_models_dir, exist_ok=True)
+        baseline = os.path.join(mock_models_dir, "r3d18_urfd_best.pth")
+        with open(baseline, "wb") as f:
+            f.write(b"0" * (1024 * 1024 + 10))
+
+        resolved = resolve_model_checkpoint(repo_root=self.test_dir, allow_baseline=True)
+        self.assertEqual(resolved, baseline)
+
+    def test_verify_and_print_checkpoint_identities(self):
+        """Verify verify_and_print_checkpoint accurately computes SHA-256 and labels models."""
+        dummy_file = os.path.join(self.test_dir, "dummy.pth")
+        with open(dummy_file, "wb") as f:
+            f.write(b"Emergency Vision AI Verification Data")
+
+        meta = verify_and_print_checkpoint(dummy_file)
+        self.assertEqual(meta["path"], dummy_file)
+        self.assertFalse(meta["is_person_crops"])
+        self.assertFalse(meta["is_baseline"])
+        self.assertEqual(meta["badge"], "Custom")
+        self.assertEqual(len(meta["sha256"]), 64)
 
     def test_open_camera_invalid_source_raises(self):
         """Verify camera open failure raises RuntimeError with informative instructions."""
@@ -250,10 +344,22 @@ class TestCameraDemo(unittest.TestCase):
             mock_yolo_instance.track.return_value = [mock_res]
             mock_yolo_cls.return_value = mock_yolo_instance
 
+            # 1. Calling with baseline model without allow_baseline MUST fail
+            with self.assertRaises(ValueError):
+                run_camera_demo(
+                    source=video_path,
+                    action_model_path="models/action_recognition/r3d18_urfd_best.pth",
+                    allow_baseline=False,
+                    max_frames=2,
+                    headless=True,
+                )
+
+            # 2. Calling with allow_baseline=True succeeds
             report = run_camera_demo(
                 source=video_path,
                 yolo_model_path="models/detection/yolo11n.pt",
                 action_model_path="models/action_recognition/r3d18_urfd_best.pth",
+                allow_baseline=True,
                 conf_threshold=0.70,
                 consecutive_required=2,
                 inference_interval=8,
@@ -267,3 +373,6 @@ class TestCameraDemo(unittest.TestCase):
             self.assertIn("fps", report)
             self.assertIn("mean_e2e_latency_ms", report)
             self.assertEqual(report["device"], "cpu")
+            self.assertTrue(report["is_baseline"])
+            self.assertFalse(report["is_person_crops"])
+            self.assertEqual(len(report["checkpoint_sha256"]), 64)

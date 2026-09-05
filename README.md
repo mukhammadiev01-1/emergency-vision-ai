@@ -208,10 +208,10 @@ The canonical Colab notebook [`notebooks/08_urfd_training_colab.ipynb`](notebook
 ### 7. Live Camera Production Demo
 Validate the end-to-end vision pipeline in real time using a connected webcam or video feed:
 ```bash
-# Run with default webcam (camera index 0)
+# Run with default webcam (requires production person-crop checkpoint)
 python3 scripts/run_camera_demo.py --camera-index 0
 
-# Run with custom parameters or device
+# Run with custom parameters or hardware device
 python3 scripts/run_camera_demo.py \
     --camera-index 0 \
     --threshold 0.70 \
@@ -220,8 +220,27 @@ python3 scripts/run_camera_demo.py \
     --padding 0.05 \
     --device auto
 ```
+
+#### Checkpoint Resolution & Strict Production Safety:
+The live camera demo enforces strict model verification to guarantee production validity:
+1. **Primary Model Target**: Defaults to the trained person-crop checkpoint (`models/action_recognition/r3d18_urfd_person_crops.pth`).
+2. **Automatic Candidate Discovery**: Automatically resolves the checkpoint from:
+   - Environment variable: `EMERGENCY_VISION_AI_ACTION_MODEL`
+   - Canonical local models directory: `models/action_recognition/r3d18_urfd_person_crops.pth`
+   - Synced experiments directory: `experiments/*/r3d18_urfd_person_crops.pth`
+   - Google Drive environment variable: `$GOOGLE_DRIVE_DIR` or `$EMERGENCY_VISION_AI_DRIVE_ROOT`
+   - Mounted Google Drive paths (`~/Library/CloudStorage/GoogleDrive-...`, `/Volumes/GoogleDrive/...`, `/content/drive/...`)
+3. **No Silent Fallback**: If the person-crop checkpoint is not found locally or in Drive, the script fails with clear synchronization instructions rather than silently falling back to the whole-frame baseline model.
+4. **Explicit Baseline Override**: To intentionally evaluate the legacy baseline model for comparative benchmarking:
+   ```bash
+   python3 scripts/run_camera_demo.py \
+       --action-model models/action_recognition/r3d18_urfd_best.pth \
+       --allow-baseline
+   ```
+5. **Pre-Flight Verification**: Prints the resolved checkpoint path, file size, SHA-256 hash, and model identity before starting inference.
+
 Real-time features:
-- Live OpenCV window displaying rolling FPS, track IDs, bounding boxes, and action classifications
+- Live OpenCV window displaying rolling FPS, track IDs, bounding boxes, model identity badge, and action classifications
 - Real-time latency HUD (Detection/tracking ms, Action inference ms, E2E frame ms)
 - Prominent Emergency Alert overlay upon confirmed 2-window fall detection
 - Graceful shutdown with `q` or Ctrl+C
