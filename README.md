@@ -205,6 +205,27 @@ The canonical Colab notebook [`notebooks/08_urfd_training_colab.ipynb`](notebook
 5. **Cell 5 — Production Benchmark**: Executes `benchmark_gpu.py` on Tesla T4 GPU.
 6. **Cell 6 — Artifact Summary**: Verifies saved checkpoints, hashes, and Drive backups.
 
+### 7. Live Camera Production Demo
+Validate the end-to-end vision pipeline in real time using a connected webcam or video feed:
+```bash
+# Run with default webcam (camera index 0)
+python3 scripts/run_camera_demo.py --camera-index 0
+
+# Run with custom parameters or device
+python3 scripts/run_camera_demo.py \
+    --camera-index 0 \
+    --threshold 0.70 \
+    --consecutive 2 \
+    --interval 8 \
+    --padding 0.05 \
+    --device auto
+```
+Real-time features:
+- Live OpenCV window displaying rolling FPS, track IDs, bounding boxes, and action classifications
+- Real-time latency HUD (Detection/tracking ms, Action inference ms, E2E frame ms)
+- Prominent Emergency Alert overlay upon confirmed 2-window fall detection
+- Graceful shutdown with `q` or Ctrl+C
+
 ---
 
 ## 🚀 Quick Start
